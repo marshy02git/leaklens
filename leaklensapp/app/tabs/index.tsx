@@ -7,7 +7,7 @@ import { Camera } from 'expo-camera';
 import React, { useState, useEffect } from 'react';
 import Button2 from '@/components/ButtonAR';
 
-const PlaceholderImage = require('@/assets/images/background-image.jpg');
+const PlaceholderImage = require('@/assets/images/houseplumb1.gif');
 
 export default function Index() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
@@ -30,15 +30,15 @@ export default function Index() {
   return (
     <View style={styles.container}>
       <Text style={styles.text}>Leak Lens</Text>
-      <Link href="/tabs/about" style={styles.button}>
-        Settings
-      </Link>
+      
       <View style={styles.imageContainer}>
         <ImageViewer imgSource={PlaceholderImage} />
       </View>
 
       <View style={styles.footerContainer}>
-        <Button theme="primary" label="Real Time Data" />
+        <Link href="/realtimedata" asChild>
+          <Button theme="primary" label="Real Time Data" />
+        </Link>
         <Button theme="primary" label="Notification Logs" />
         <Link href="/ar" asChild>
           <Button2 theme2="secondary" label="AR" />
@@ -60,9 +60,11 @@ const styles = StyleSheet.create({
     flex: 0.5,
   },
   text: {
-    color: '#fff',
-    fontSize: 24,
+    color: '#0bfffe',
+    fontSize: 60,
+    fontFamily: 'American Typewriter',
     fontWeight: 'bold',
+    
   },
   button: {
     fontSize: 20,
@@ -77,7 +79,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   footerContainer: {
-    flex: 1,
+    flex: 2,
     alignItems: 'center',
   },
 });

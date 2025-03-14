@@ -34,15 +34,6 @@ export default function ARScreen() {
   return (
     <View style={styles.container}>
       <CameraView style={styles.camera} ref={cameraRef} />
-      
-      {/* Flip Camera Button */}
-      <TouchableOpacity 
-        style={styles.flipButton} 
-        onPress={() => setCameraType(cameraType === 'back' ? 'front' : 'back')}
-      >
-        <Text style={styles.buttonText}>Flip Camera</Text>
-      </TouchableOpacity>
-
       {/* Back Button */}
       <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
         <Text style={styles.buttonText}>Go Back</Text>

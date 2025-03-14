@@ -4,24 +4,34 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 type Props = {
   label: string;
   theme2?: 'secondary';
+  onPress?: () => void; // Allow button click functionality
 };
 
-export default function Button({ label, theme2 }: Props) {
+export default function Button2({ label, theme2, onPress }: Props) {
   if (theme2 === 'secondary') {
     return (
       <View
         style={[
           styles.buttonContainer,
           { borderWidth: 3, borderColor: '#0bfffe', borderRadius: 18 },
-        ]}>
-    
+        ]}
+      >
+        <Pressable
+          style={[styles.button, { backgroundColor: '#fff' }]} // ✅ Make button background blue
+          onPress={onPress}
+        >
+          <FontAwesome name="camera" size={18} color="#25292e" style={styles.buttonIcon} /> {/* ✅ Make icon dark */}
+          <Text style={[styles.buttonLabel, { color: '#25292e' }]}>{label}</Text> {/* ✅ Fix text color */}
+        </Pressable>
       </View>
     );
   }
 
   return (
     <View style={styles.buttonContainer}>
-      
+      <Pressable style={styles.button} onPress={onPress}>
+        <Text style={[styles.buttonLabel, { color: '#25292e' }]}>{label}</Text> {/* ✅ Ensure text is dark */}
+      </Pressable>
     </View>
   );
 }
@@ -47,7 +57,6 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   buttonLabel: {
-    color: '#fff',
     fontSize: 16,
   },
 });

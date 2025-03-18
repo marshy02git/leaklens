@@ -6,6 +6,7 @@ import Button from '@/components/Button';
 import { Camera } from 'expo-camera';
 import React, { useState, useEffect } from 'react';
 import Button2 from '@/components/ButtonAR';
+import Button3 from '@/components/ButtonRTD';
 
 const PlaceholderImage = require('@/assets/images/houseplumb1.gif');
 
@@ -29,7 +30,7 @@ export default function Index() {
 }
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>Leak Lens</Text>
+      <Text style={styles.text}>LeakLens</Text>
       
       <View style={styles.imageContainer}>
         <ImageViewer imgSource={PlaceholderImage} />
@@ -37,7 +38,7 @@ export default function Index() {
 
       <View style={styles.footerContainer}>
         <Link href="/realtimedata" asChild>
-          <Button theme="primary" label="Real Time Data" />
+          <Button3 theme3="third" label="Real Time Data" />
         </Link>
         <Button theme="primary" label="Notification Logs" />
         <Link href="/ar" asChild>

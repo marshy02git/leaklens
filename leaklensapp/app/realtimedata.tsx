@@ -19,10 +19,19 @@ export default function RealTimeDataScreen() {
       </View>
 
       <View style={styles.elementsContainer}>
-        <Text style={styles.elements}>Kitchen</Text>
-        <Text style={styles.elements}>Bathroom1</Text>
-        <Text style={styles.elements}>MasterBedroom</Text>
-        <Text style={styles.elements}>Garage</Text>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.elements}>Kitchen</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.elements}>Bathroom1</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.elements}>MasterBedroom</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.elements}>Garage</Text>
+        </TouchableOpacity>
+        
       </View>
 
       {/* Data Display Section */}
@@ -78,4 +87,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-evenly',
   },
+  button: {
+    backgroundColor: 'transparent',
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+  }
 });

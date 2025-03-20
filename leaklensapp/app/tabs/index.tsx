@@ -8,7 +8,11 @@ import React, { useState, useEffect } from 'react';
 import Button2 from '@/components/ButtonAR';
 import Button3 from '@/components/ButtonRTD';
 
-const PlaceholderImage = require('@/assets/images/houseplumb1.gif');
+/*const PlaceholderImage = require('@/assets/images/houseplumb1.gif');
+      <View style={styles.imageContainer}>
+        <ImageViewer imgSource={PlaceholderImage} />
+      </View>
+      */
 
 export default function Index() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
@@ -32,15 +36,16 @@ export default function Index() {
     <View style={styles.container}>
       <Text style={styles.text}>LeakLens</Text>
       
-      <View style={styles.imageContainer}>
-        <ImageViewer imgSource={PlaceholderImage} />
-      </View>
-
+      
+      
       <View style={styles.footerContainer}>
         <Link href="/realtimedata" asChild>
           <Button3 theme3="third" label="Real Time Data" />
         </Link>
-        <Button theme="primary" label="Notification Logs" />
+        <Link href="/notificationlogs" asChild>
+          <Button theme="primary" label="Notification Logs" />
+        </Link>
+        
         <Link href="/ar" asChild>
           <Button2 theme2="secondary" label="AR" />
         </Link>

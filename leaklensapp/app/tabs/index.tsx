@@ -45,7 +45,6 @@ export default function Index() {
         <Link href="/notificationlogs" asChild>
           <Button theme="primary" label="Notification Logs" />
         </Link>
-        
         <Link href="/ar" asChild>
           <Button2 theme2="secondary" label="AR" />
         </Link>

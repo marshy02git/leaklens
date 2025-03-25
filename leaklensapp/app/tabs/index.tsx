@@ -34,7 +34,7 @@ export default function Index() {
 }
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>LeakLens</Text>
+      <Text style={styles.text}>Leaklens</Text>
       
       
       

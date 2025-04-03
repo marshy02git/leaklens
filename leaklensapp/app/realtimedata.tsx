@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
 import { getFirestore, collection, onSnapshot } from 'firebase/firestore';
@@ -17,69 +17,73 @@ type LogEntry = {
 
 export default function RealTimeDataScreen() {
   const router = useRouter();
-  const [kitchenLogs, setKitchenLogs] = useState<LogEntry[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const db = getFirestore(firebaseApp);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'logs'), (snapshot) => {
-      const logs = snapshot.docs
-        .map((doc) => ({
-          id: doc.id,
-          ...(doc.data() as Omit<LogEntry, 'id'>), 
-        }))
-        .filter((log) => log.location === 'kitchen');
-  
-      setKitchenLogs(logs);
+      const entries = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...(doc.data() as Omit<LogEntry, 'id'>),
+      }));
+      setLogs(entries);
     });
-  
+
     return () => unsubscribe();
   }, []);
 
-  return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <FontAwesome name="arrow-left" size={25} color="white" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Real-Time Data</Text>
-      </View>
-
-      {/* Section Buttons */}
-      <View style={styles.elementsContainer}>
-        <TouchableOpacity>
-          <Text style={styles.elements}>Kitchen</Text>
-        </TouchableOpacity>
-        <TouchableOpacity>
-          <Text style={styles.elements}>Bathroom1</Text>
-        </TouchableOpacity>
-        <TouchableOpacity>
-          <Text style={styles.elements}>MasterBedroom</Text>
-        </TouchableOpacity>
-        <TouchableOpacity>
-          <Text style={styles.elements}>Garage</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Kitchen Data Section */}
-      <View style={styles.dataContainer}>
-        <Text style={styles.sectionTitle}>Kitchen Logs</Text>
-        <FlatList
-          data={kitchenLogs}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <View style={styles.logItem}>
+  const renderLogSection = (location: string) => {
+    const roomLogs = logs.filter(
+      (log) =>
+        typeof log.location === 'string' &&
+        log.location.toLowerCase() === location.toLowerCase()
+    );
+  
+    return (
+      <View style={styles.dataContainer} key={location}>
+        <Text style={styles.sectionTitle}> {location} Logs</Text>
+        {roomLogs.length === 0 ? (
+          <Text style={styles.empty}>No logs yet.</Text>
+        ) : (
+          roomLogs.map((item) => (
+            <View key={item.id} style={styles.logItem}>
               <Text style={styles.logText}>Status: {item.status}</Text>
               <Text style={styles.timestamp}>{item.timestamp || 'No timestamp'}</Text>
               <Text style={styles.logText}>Flow Rate: {item.flowrate || 'N/A'}</Text>
               <Text style={styles.logText}>Pressure: {item.pressure || 'N/A'}</Text>
               <Text style={styles.logText}>Temperature: {item.temp || 'N/A'}</Text>
             </View>
-          )}
-          ListEmptyComponent={<Text style={styles.empty}>No logs yet.</Text>}
-        />
+          ))
+        )}
       </View>
-    </View>
+    );
+  };
+  
+
+  return (
+    <ScrollView style={{ flex: 1, backgroundColor: '#121212' }}>
+      <View style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <FontAwesome name="arrow-left" size={25} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Real-Time Data</Text>
+        </View>
+
+        {/* Section Buttons */}
+        <View style={styles.elementsContainer}>
+          {['Kitchen', 'Bathroom1', 'MasterBedroom', 'Garage'].map((room) => (
+            <TouchableOpacity key={room}>
+              <Text style={styles.elements}>{room}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Log Sections */}
+        {['Kitchen', 'Bathroom1', 'MasterBedroom', 'Garage'].map(renderLogSection)}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -113,7 +117,6 @@ const styles = StyleSheet.create({
     color: 'white',
   },
   dataContainer: {
-    flex: 1,
     marginTop: 10,
   },
   sectionTitle: {
@@ -139,6 +142,6 @@ const styles = StyleSheet.create({
   empty: {
     color: 'gray',
     textAlign: 'center',
-    marginTop: 20,
+    marginTop: 10,
   },
 });

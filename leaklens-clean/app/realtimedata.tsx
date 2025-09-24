@@ -11,7 +11,10 @@ import { useRouter } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
 import { getFirestore, collection, onSnapshot } from 'firebase/firestore';
 import { firebaseApp } from '../firebase/config';
+import { SafeAreaView } from 'react-native-safe-area-context'; // ✅ added
+
 /*import FlowRateChart from '@/components/FlowRateChart';*/
+
 function StatBlock({ label, stats, unit }: { label: string; stats: any; unit: string }) {
   return (
     <View style={{ marginVertical: 8 }}>
@@ -22,6 +25,7 @@ function StatBlock({ label, stats, unit }: { label: string; stats: any; unit: st
     </View>
   );
 }
+
 function getStats(values: string[]) {
   const nums = values.map((v) => parseFloat(v)).filter((v) => !isNaN(v));
   if (nums.length === 0) return { min: '-', max: '-', avg: '-', current: '-' };
@@ -74,95 +78,93 @@ export default function RealTimeDataScreen() {
       setRefreshing(false);
     }, 800); // Simulated refresh delay
   }, []);
-const renderDashboard = () => {
-  const now = new Date();
-  const filteredLogs = logs.filter((log) => {
-    if (!log.timestamp) return false;
-    const logTime = new Date(log.timestamp);
-    if (timeframe === 'hour') {
-      return now.getTime() - logTime.getTime() <= 3600000; // Last hour
-    } else {
-      return now.toDateString() === logTime.toDateString(); // Today
+
+  const renderDashboard = () => {
+    const now = new Date();
+    const filteredLogs = logs.filter((log) => {
+      if (!log.timestamp) return false;
+      const logTime = new Date(log.timestamp);
+      if (timeframe === 'hour') {
+        return now.getTime() - logTime.getTime() <= 3600000; // Last hour
+      } else {
+        return now.toDateString() === logTime.toDateString(); // Today
+      }
+    });
+
+    const flowByRoom: Record<string, number[]> = {};
+    const pressureByRoom: Record<string, number[]> = {};
+
+    filteredLogs.forEach((log) => {
+      const room = log.location;
+      if (!room) return;
+
+      const flow = parseFloat(log.flowrate || '0');
+      const pressure = parseFloat(log.pressure || '0');
+
+      if (!flowByRoom[room]) flowByRoom[room] = [];
+      if (!pressureByRoom[room]) pressureByRoom[room] = [];
+
+      if (!isNaN(flow)) flowByRoom[room].push(flow);
+      if (!isNaN(pressure)) pressureByRoom[room].push(pressure);
+    });
+
+    let mostFlowRoom = 'N/A';
+    let mostFlowValue = 0;
+    for (const [room, values] of Object.entries(flowByRoom)) {
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+      if (avg > mostFlowValue) {
+        mostFlowValue = avg;
+        mostFlowRoom = room;
+      }
     }
-  });
 
-  const flowByRoom: Record<string, number[]> = {};
-  const pressureByRoom: Record<string, number[]> = {};
-
-  filteredLogs.forEach((log) => {
-    const room = log.location;
-    if (!room) return;
-
-    const flow = parseFloat(log.flowrate || '0');
-    const pressure = parseFloat(log.pressure || '0');
-
-    if (!flowByRoom[room]) flowByRoom[room] = [];
-    if (!pressureByRoom[room]) pressureByRoom[room] = [];
-
-    if (!isNaN(flow)) flowByRoom[room].push(flow);
-    if (!isNaN(pressure)) pressureByRoom[room].push(pressure);
-  });
-
-  let mostFlowRoom = 'N/A';
-  let mostFlowValue = 0;
-  for (const [room, values] of Object.entries(flowByRoom)) {
-    const avg = values.reduce((a, b) => a + b, 0) / values.length;
-    if (avg > mostFlowValue) {
-      mostFlowValue = avg;
-      mostFlowRoom = room;
+    let maxPressureRoom = 'N/A';
+    let maxPressureValue = 0;
+    for (const [room, values] of Object.entries(pressureByRoom)) {
+      const max = Math.max(...values);
+      if (max > maxPressureValue) {
+        maxPressureValue = max;
+        maxPressureRoom = room;
+      }
     }
-  }
 
-  let maxPressureRoom = 'N/A';
-  let maxPressureValue = 0;
-  for (const [room, values] of Object.entries(pressureByRoom)) {
-    const max = Math.max(...values);
-    if (max > maxPressureValue) {
-      maxPressureValue = max;
-      maxPressureRoom = room;
-    }
-  }
+    const criticalCount = filteredLogs.filter((l) => l.status === 'critical').length;
 
-  const criticalCount = filteredLogs.filter((l) => l.status === 'critical').length;
-
-  return (
-    
-    <View style={styles.dashboard}>
-      <View style={styles.card}>
-        <Text style={styles.cardTitleCenter}>Most Flow</Text>
-        <Text style={styles.cardValue}>{mostFlowRoom}</Text>
-        <Text style={styles.cardSub}>{mostFlowValue.toFixed(1)} L/m</Text>
+    return (
+      <View style={styles.dashboard}>
+        <View style={styles.card}>
+          <Text style={styles.cardTitleCenter}>Most Flow</Text>
+          <Text style={styles.cardValue}>{mostFlowRoom}</Text>
+          <Text style={styles.cardSub}>{mostFlowValue.toFixed(1)} L/m</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardTitleCenter}>Highest Pressure</Text>
+          <Text style={styles.cardValue}>{maxPressureRoom}</Text>
+          <Text style={styles.cardSub}>{maxPressureValue.toFixed(1)} PSI</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardTitleCenter}>Critical Alerts</Text>
+          <Text style={styles.cardValue}>{criticalCount}</Text>
+        </View>
       </View>
-      <View style={styles.card}>
-        <Text style={styles.cardTitleCenter}>Highest Pressure</Text>
-        <Text style={styles.cardValue}>{maxPressureRoom}</Text>
-        <Text style={styles.cardSub}>{maxPressureValue.toFixed(1)} PSI</Text>
-      </View>
-      <View style={styles.card}>
-        <Text style={styles.cardTitleCenter}>Critical Alerts</Text>
-        <Text style={styles.cardValue}>{criticalCount}</Text>
-      </View>
-    </View>
-  );
-};
-
-  
+    );
+  };
 
   const renderLogSection = (location: string) => {
     const [showSummary, setShowSummary] = useState(false);
-  
+
     const roomLogs = logs
       .filter((log) => log.location?.toLowerCase() === location.toLowerCase())
       .slice(-10); // Limit to last 10
-  
+
     const flowStats = getStats(roomLogs.map((log) => log.flowrate));
     const pressureStats = getStats(roomLogs.map((log) => log.pressure));
     const tempStats = getStats(roomLogs.map((log) => log.temp));
-  
+
     return (
       <View style={styles.dataContainer} key={location}>
         <Text style={styles.sectionTitle}> {location} Logs</Text>
-  
+
         {roomLogs.length === 0 ? (
           <Text style={styles.empty}>No logs yet.</Text>
         ) : (
@@ -181,19 +183,19 @@ const renderDashboard = () => {
                 <Text style={styles.logText}>Temperature: {item.temp || 'N/A'}</Text>
               </View>
             ))}
-  
+
             {/* Dropdown Toggle Button */}
             <TouchableOpacity onPress={() => setShowSummary(!showSummary)} style={styles.dropdownToggle}>
               <Text style={styles.dropdownToggleText}>
                 {showSummary ? 'Hide Summary ▲' : 'Show Summary ▼'}
               </Text>
             </TouchableOpacity>
-  
+
             {/* Summary Section */}
             {showSummary && (
               <View style={styles.logItem}>
                 <Text style={[styles.logText, { color: '#0bfffe', fontWeight: 'bold', marginBottom: 10 }]}>Summary</Text>
-  
+
                 {/* Header Row */}
                 <View style={styles.statRow}>
                   <Text style={styles.statHeader}></Text>
@@ -201,7 +203,7 @@ const renderDashboard = () => {
                   <Text style={styles.statHeader}>Pressure</Text>
                   <Text style={styles.statHeader}>Temp</Text>
                 </View>
-  
+
                 {/* Min */}
                 <View style={styles.statRow}>
                   <Text style={styles.statLabel}>Min</Text>
@@ -209,7 +211,7 @@ const renderDashboard = () => {
                   <Text style={styles.statValue}>{pressureStats.min}</Text>
                   <Text style={styles.statValue}>{tempStats.min}</Text>
                 </View>
-  
+
                 {/* Max */}
                 <View style={styles.statRow}>
                   <Text style={styles.statLabel}>Max</Text>
@@ -217,7 +219,7 @@ const renderDashboard = () => {
                   <Text style={styles.statValue}>{pressureStats.max}</Text>
                   <Text style={styles.statValue}>{tempStats.max}</Text>
                 </View>
-  
+
                 {/* Avg */}
                 <View style={styles.statRow}>
                   <Text style={styles.statLabel}>Avg</Text>
@@ -232,7 +234,6 @@ const renderDashboard = () => {
       </View>
     );
   };
-  
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -248,65 +249,65 @@ const renderDashboard = () => {
   };
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: '#121212' }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <FontAwesome name="arrow-left" size={25} color="white" />
-          </TouchableOpacity>
-          <Text style={styles.title}>Real-Time Data</Text>
-        </View>
-
-        {/* Dashboard Summary */}
-        {renderDashboard()}
-
-        {/* Chart Toggle */}
-        <View style={styles.chartSelector}>
-          {chartTypes.map((type) => (
-            <TouchableOpacity
-              key={type}
-              style={[
-                styles.chartButton,
-                chartType === type && { backgroundColor: '#0bfffe' },
-              ]}
-              onPress={() => setChartType(type)}
-            >
-              <Text
-                style={{
-                  color: chartType === type ? 'black' : 'white',
-                  fontWeight: 'bold',
-                }}
-              >
-                {type.toUpperCase()}
-              </Text>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']}>
+      <ScrollView
+        style={{ flex: 1 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        <View style={styles.container}>
+          {/* Header */}
+          <View style={styles.header}>
+            <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+              <FontAwesome name="arrow-left" size={25} color="white" />
             </TouchableOpacity>
-          ))}
+            <Text style={styles.title}>Real-Time Data</Text>
+          </View>
+
+          {/* Dashboard Summary */}
+          {renderDashboard()}
+
+          {/* Chart Toggle */}
+          <View style={styles.chartSelector}>
+            {chartTypes.map((type) => (
+              <TouchableOpacity
+                key={type}
+                style={[
+                  styles.chartButton,
+                  chartType === type && { backgroundColor: '#0bfffe' },
+                ]}
+                onPress={() => setChartType(type)}
+              >
+                <Text
+                  style={{
+                    color: chartType === type ? 'black' : 'white',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  {type.toUpperCase()}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Room Navigation */}
+          <View style={styles.elementsContainer}>
+            {locations.map((room) => (
+              <TouchableOpacity
+                key={room}
+                onPress={() => router.push({ pathname: '/ar', params: { room } })}
+              >
+                <Text style={styles.elements}>{room}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Log Sections */}
+          {locations.map(renderLogSection)}
         </View>
-
-        {/* Room Navigation */}
-        <View style={styles.elementsContainer}>
-  {locations.map((room) => (
-    <TouchableOpacity
-      key={room}
-      onPress={() => router.push({ pathname: '/ar', params: { room } })}
-    >
-      <Text style={styles.elements}>{room}</Text>
-    </TouchableOpacity>
-  ))}
-</View>
-
-
-        {/* Log Sections */}
-        {locations.map(renderLogSection)}
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
-
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#121212', padding: 10 },
@@ -379,7 +380,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   arText: { color: '#121212', fontWeight: 'bold', fontSize: 16 },
-  
+
   statRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -426,19 +427,15 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 10,
   },
-  
   timeButton: {
     paddingVertical: 6,
     paddingHorizontal: 14,
     backgroundColor: '#333',
     borderRadius: 8,
   },
-  
   cardTitleCenter: {
     color: 'gray',
     fontSize: 14,
     textAlign: 'center',
   },
-  
-  
 });

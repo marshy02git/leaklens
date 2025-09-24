@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function NotificationLogsScreen() {
   const router = useRouter();
@@ -37,6 +38,7 @@ export default function NotificationLogsScreen() {
   }, []);
 
   return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#121212' }} edges={['top']}>
     <ScrollView
       style={{ flex: 1, backgroundColor: '#121212' }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -82,6 +84,7 @@ export default function NotificationLogsScreen() {
         <Text style={styles.cardText}>Last refresh: {lastRefresh}</Text>
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

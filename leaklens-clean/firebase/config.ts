@@ -1,5 +1,6 @@
 // firebase/config.ts
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
+import { getDatabase, Database } from "firebase/database";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBzCIDQMYJhuPM1OgGtvaq2U_VIYfcZoAw",
@@ -12,4 +13,8 @@ const firebaseConfig = {
   measurementId: "G-ENTTCL9YXH",
 };
 
-export const firebaseApp = initializeApp(firebaseConfig);
+// ✅ Initialize exactly once (works with Expo hot reload too)
+export const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+// ✅ Shared Realtime Database instance bound to this app
+export const rtdb: Database = getDatabase(app);

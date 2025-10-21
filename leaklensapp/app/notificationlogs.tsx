@@ -22,8 +22,7 @@ export default function NotificationLogsScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: '#121212' }}
-      contentContainerStyle={styles.container}
-    >
+      contentContainerStyle={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>

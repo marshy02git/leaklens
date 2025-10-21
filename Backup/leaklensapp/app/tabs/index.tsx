@@ -1,22 +1,14 @@
-import { Text, View, StyleSheet, Alert } from 'react-native';
-import { Link, useRouter } from 'expo-router';
-import { Image } from 'expo-image';
-import ImageViewer from '@/components/ImageViewer';
-import Button from '@/components/Button';
-import { Camera } from 'expo-camera';
 import React, { useState, useEffect } from 'react';
-import Button2 from '@/components/ButtonAR';
-import Button3 from '@/components/ButtonRTD';
+import { Text, View, StyleSheet, Alert, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
+import { Camera } from 'expo-camera';
+import { Link, useRouter } from 'expo-router';
+import { FontAwesome } from '@expo/vector-icons';
 
-/*const PlaceholderImage = require('@/assets/images/houseplumb1.gif');
-      <View style={styles.imageContainer}>
-        <ImageViewer imgSource={PlaceholderImage} />
-      </View>
-      */
+const screenWidth = Dimensions.get('window').width;
 
 export default function Index() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const router = useRouter(); // Use Router for navigation
+  const router = useRouter();
 
   useEffect(() => {
     (async () => {
@@ -30,61 +22,89 @@ export default function Index() {
       Alert.alert("Camera Access", "Requesting permission...");
     } else if (!hasPermission) {
       Alert.alert("Permission Denied", "Enable camera access in settings.");
+    } else {
+      router.push('/ar');
+    }
   };
-}
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.text}>Leaklens</Text>
-      
-      
-      
-      <View style={styles.footerContainer}>
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.title}>Leaklens</Text>
+      <Text style={styles.subtitle}>Diagnostics Made Easy</Text>
+
+      <View style={styles.cardContainer}>
         <Link href="/realtimedata" asChild>
-          <Button3 theme3="third" label="Real Time Data" />
+          <TouchableOpacity style={styles.card}>
+            <FontAwesome name="tachometer" size={20} color="#0bfffe" style={styles.cardIcon} />
+            <Text style={styles.cardLabel}>Real Time Data</Text>
+          </TouchableOpacity>
         </Link>
+
         <Link href="/notificationlogs" asChild>
-          <Button theme="primary" label="Notification Logs" />
+          <TouchableOpacity style={styles.card}>
+            <FontAwesome name="bell" size={20} color="#0bfffe" style={styles.cardIcon} />
+            <Text style={styles.cardLabel}>Notification Logs</Text>
+          </TouchableOpacity>
         </Link>
+
         <Link href="/ar" asChild>
-          <Button2 theme2="secondary" label="AR" />
+          <TouchableOpacity style={styles.card}>
+            <FontAwesome name="camera" size={20} color="#0bfffe" style={styles.cardIcon} />
+            <Text style={styles.cardLabel}>AR View</Text>
+          </TouchableOpacity>
         </Link>
-        <Button label="Logout" />
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: '#25292e',
+    flexGrow: 1,
+    backgroundColor: '#121212',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 60,
   },
-  imageContainer: {
-    flex: 0.5,
-  },
-  text: {
+  title: {
     color: '#0bfffe',
-    fontSize: 60,
-    fontFamily: 'American Typewriter',
+    fontSize: 48,
     fontWeight: 'bold',
-    
+    fontFamily: 'American Typewriter', // Optional: match previous style
+    textAlign: 'center',
+    marginBottom: 8,
   },
-  button: {
-    fontSize: 20,
-    textDecorationLine: 'underline',
-    color: '#fff',
-    marginBottom: 20,
+  subtitle: {
+    color: '#aaa',
+    fontSize: 16,
+    marginBottom: 30,
+    textAlign: 'center',
   },
-  button2: {
-    fontSize: 20,
-    textDecorationLine: 'underline',
-    color: '#fff',
-    marginBottom: 20,
-  },
-  footerContainer: {
-    flex: 2,
+  cardContainer: {
+    width: '100%',
     alignItems: 'center',
+    gap: 16,
+  },
+  card: {
+    width: screenWidth * 0.85,
+    backgroundColor: '#1f1f1f',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  cardIcon: {
+    marginRight: 12,
+  },
+  cardLabel: {
+    fontSize: 18,
+    color: '#0bfffe',
+    fontWeight: '600',
   },
 });

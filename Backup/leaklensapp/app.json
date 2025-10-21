@@ -1,8 +1,10 @@
 {
   "expo": {
-    "name": "leaklens",
-    "slug": "leaklens",
+    "name": "leaklensapp",
+    "slug": "leaklensapp",
     "version": "1.0.0",
+    "sdkVersion": "53.0.0",
+    "platforms": ["ios", "android", "web"],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",

@@ -1,16 +1,25 @@
-import React, { useState } from 'react';
-import {View, Text, StyleSheet, TouchableOpacity, ScrollView} from 'react-native';
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  RefreshControl,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
 
 export default function NotificationLogsScreen() {
   const router = useRouter();
   const [statusIndex, setStatusIndex] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<string>(new Date().toLocaleTimeString());
 
   const statusStates = [
-    { label: 'Good', color: '#28a745', icon: 'check' as const},
+    { label: 'Good', color: '#28a745', icon: 'check' as const },
     { label: 'Caution', color: '#ffc107', icon: 'exclamation-triangle' as const },
-    { label: 'Critical', color: '#dc3545', icon: 'times' as const},
+    { label: 'Critical', color: '#dc3545', icon: 'times' as const },
   ];
 
   const currentStatus = statusStates[statusIndex];
@@ -19,9 +28,18 @@ export default function NotificationLogsScreen() {
     setStatusIndex((prevIndex) => (prevIndex + 1) % statusStates.length);
   };
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    setTimeout(() => {
+      setLastRefresh(new Date().toLocaleTimeString());
+      setRefreshing(false);
+    }, 800);
+  }, []);
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: '#121212' }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       contentContainerStyle={styles.container}
     >
       {/* Header */}
@@ -35,17 +53,24 @@ export default function NotificationLogsScreen() {
       {/* Subheading */}
       <Text style={styles.subheading}>Quickly monitor device status and all alerts</Text>
 
-      {/* Connectivity Status Badge */}
+      {/* Connectivity Badge */}
       <View style={styles.connectionBadge}>
         <FontAwesome name="wifi" size={14} color="white" />
         <Text style={styles.badgeText}>Connected</Text>
+      </View>
+
+      {/* Battery Badge */}
+      <View style={styles.batteryBadge}>
+        <FontAwesome name="battery-three-quarters" size={14} color="white" />
+        <Text style={styles.badgeText}>Battery: 75%</Text>
       </View>
 
       {/* Status Box */}
       <View style={styles.statusContainerWrapper}>
         <TouchableOpacity
           style={[styles.statusContainer, { backgroundColor: currentStatus.color }]}
-          onPress={handleStatusPress}>
+          onPress={handleStatusPress}
+        >
           <FontAwesome name={currentStatus.icon} size={20} color="white" style={{ marginRight: 10 }} />
           <Text style={styles.statusText}>{currentStatus.label}</Text>
         </TouchableOpacity>
@@ -54,7 +79,7 @@ export default function NotificationLogsScreen() {
       {/* Card: Future Data */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>All Notifications</Text>
-        <Text style={styles.cardText}>Last refresh: 5h</Text>
+        <Text style={styles.cardText}>Last refresh: {lastRefresh}</Text>
       </View>
     </ScrollView>
   );
@@ -94,6 +119,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     marginLeft: 5,
+    marginBottom: 5,
+  },
+  batteryBadge: {
+    backgroundColor: '#f39c12',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginLeft: 5,
+    marginBottom: 20,
   },
   badgeText: {
     color: 'white',
@@ -135,3 +172,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
+

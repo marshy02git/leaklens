@@ -1,5 +1,5 @@
 // app/realtimedata.tsx
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -12,7 +12,6 @@ import {
 import { useRouter } from "expo-router";
 import { FontAwesome } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
-
 import { rtdb } from "../firebase/config";
 import { ref, onValue } from "firebase/database";
 import { subscribeAlerts } from "../firebase/db";
@@ -29,10 +28,8 @@ function getStats(values: (number | undefined)[]) {
   };
 }
 
-// ✅ Show HH:MM:SS.mmm (keeps ms)
 const formatTimeWithMs = (ms: number) => {
   try {
-    // Some RN builds support fractional seconds
     // @ts-ignore
     return new Date(ms).toLocaleTimeString([], {
       hour: "2-digit",
@@ -51,12 +48,12 @@ const formatTimeWithMs = (ms: number) => {
 };
 
 type Reading = {
-  id: string;          // e.g., "Room1/Pipe3"
+  id: string;          // "Room1/Pipe3"
   t_ms: number;
   flow_Lmin: number;
   temp_C: number;
   pressure_psi: number;
-  ts_server_ms: number; // server/client receive time (ms)
+  ts_server_ms: number;
 };
 
 export default function RealTimeDataScreen() {
@@ -73,66 +70,91 @@ export default function RealTimeDataScreen() {
   const [activeRoom, setActiveRoom] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
 
-  useEffect(() => {
-    console.log("[RT] mounting screen");
+  // ====== Listener lifecycle refs (so we can detach/reattach on pull-to-refresh) ======
+  const devicesUnsubRef = useRef<null | (() => void)>(null);
+  const roomUnsubRef = useRef<null | (() => void)>(null);
+  const pipeUnsubsRef = useRef<Array<() => void>>([]);
+  const alertsUnsubRef = useRef<null | (() => void)>(null);
+
+  // ====== Throttle state updates to avoid jank ======
+  const latestMapRef = useRef<Record<string, Reading>>({});
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const THROTTLE_MS = 400; // tweak (300–500ms is a good sweet spot)
+
+  const flushThrottled = useCallback(() => {
+    if (throttleTimerRef.current) return;
+    throttleTimerRef.current = setTimeout(() => {
+      throttleTimerRef.current = null;
+      const rows = Object.values(latestMapRef.current);
+      setReadings(rows);
+    }, THROTTLE_MS);
+  }, []);
+
+  const detachAll = useCallback(() => {
+    devicesUnsubRef.current?.();
+    roomUnsubRef.current?.();
+    pipeUnsubsRef.current.forEach((u) => u());
+    pipeUnsubsRef.current = [];
+    alertsUnsubRef.current?.();
+    devicesUnsubRef.current = null;
+    roomUnsubRef.current = null;
+    alertsUnsubRef.current = null;
+    if (throttleTimerRef.current) {
+      clearTimeout(throttleTimerRef.current);
+      throttleTimerRef.current = null;
+    }
+  }, []);
+
+  const attachAll = useCallback(() => {
+    console.log("[RT] attaching listeners");
     const devicesRef = ref(rtdb, "Devices");
 
-    // Unsubs bucket
-    const unsubs: Array<() => void> = [];
-    const perPipeUnsubs: Array<() => void> = [];
-
-    // 1) Discover rooms under Devices/
-    const unsubDevices = onValue(
+    devicesUnsubRef.current = onValue(
       devicesRef,
       (snap) => {
         const devicesVal = snap.val() || {};
         const roomKeys = Object.keys(devicesVal);
-        console.log("[RT] rooms discovered:", roomKeys);
         setRooms(roomKeys);
 
-        // Choose an active room
         let chosen = activeRoom && roomKeys.includes(activeRoom) ? activeRoom : null;
         if (!chosen && roomKeys.length > 0) chosen = roomKeys[0];
         setActiveRoom(chosen);
 
-        // If nothing there, clear UI
+        // if no rooms, clear
         if (!chosen) {
           setPipes([]);
+          latestMapRef.current = {};
           setReadings([]);
           return;
         }
 
-        // 2) Discover pipes under Devices/{room}
+        // room listener
         const roomRef = ref(rtdb, `Devices/${chosen}`);
-        const unsubRoom = onValue(
+        roomUnsubRef.current?.();
+        roomUnsubRef.current = onValue(
           roomRef,
           (roomSnap) => {
             const roomVal = roomSnap.val() || {};
             const pipeKeys = Object.keys(roomVal);
-            console.log(`[RT] pipes in ${chosen}:`, pipeKeys);
             setPipes(pipeKeys);
 
-            // Clear old pipe listeners
-            perPipeUnsubs.forEach((u) => u());
-            perPipeUnsubs.length = 0;
+            // clear old per-pipe
+            pipeUnsubsRef.current.forEach((u) => u());
+            pipeUnsubsRef.current = [];
 
-            // If no pipes yet, clear readings
             if (pipeKeys.length === 0) {
+              latestMapRef.current = {};
               setReadings([]);
               return;
             }
 
-            // 3) Subscribe to Latest for each pipe
             pipeKeys.forEach((pipeKey) => {
               const latestRef = ref(rtdb, `Devices/${chosen}/${pipeKey}/Latest`);
-              const unsubLatest = onValue(
+              const u = onValue(
                 latestRef,
-                (latestSnap) => {
-                  const v = latestSnap.val();
-                  if (!v) {
-                    console.log(`[RT] no Latest at ${chosen}/${pipeKey} (yet)`);
-                    return;
-                  }
+                (lsnap) => {
+                  const v = lsnap.val();
+                  if (!v) return;
 
                   const item: Reading = {
                     id: `${chosen}/${pipeKey}`,
@@ -140,62 +162,65 @@ export default function RealTimeDataScreen() {
                     flow_Lmin: Number(v.flow_Lmin ?? 0),
                     temp_C: Number(v.temp_C ?? 0),
                     pressure_psi: Number(v.pressure_psi ?? 0),
-                    // Prefer backend-provided ts if present; otherwise now()
                     ts_server_ms: Number(v.ts_server_ms ?? Date.now()),
                   };
 
-                  setReadings((prev) => {
-                    const idx = prev.findIndex((r) => r.id === item.id);
-                    if (idx === -1) return [...prev, item];
-                    const next = prev.slice();
-                    next[idx] = item;
-                    return next;
-                  });
+                  // store in map and flush on throttle
+                  latestMapRef.current[item.id] = item;
+                  flushThrottled();
                 },
                 (err) => {
-                  console.warn(`[RT] Latest listener error @ ${chosen}/${pipeKey}:`, err?.message);
-                  setLastError(`Latest ${chosen}/${pipeKey}: ${err?.message ?? "unknown error"}`);
+                  console.warn(`[RT] Latest error @ ${chosen}/${pipeKey}:`, err?.message);
+                  setLastError(`Latest ${chosen}/${pipeKey}: ${err?.message ?? "unknown"}`);
                 }
               );
-              perPipeUnsubs.push(unsubLatest);
+              pipeUnsubsRef.current.push(u);
             });
           },
           (err) => {
-            console.warn("[RT] room listener error:", err?.message);
-            setLastError(`Room: ${err?.message ?? "unknown error"}`);
+            console.warn("[RT] room error:", err?.message);
+            setLastError(`Room: ${err?.message ?? "unknown"}`);
           }
         );
-
-        unsubs.push(unsubRoom);
       },
       (err) => {
-        console.warn("[RT] devices listener error:", err?.message);
-        setLastError(`Devices: ${err?.message ?? "unknown error"}`);
+        console.warn("[RT] devices error:", err?.message);
+        setLastError(`Devices: ${err?.message ?? "unknown"}`);
       }
     );
 
-    unsubs.push(unsubDevices);
+    // Alerts
+    alertsUnsubRef.current?.();
+    alertsUnsubRef.current = subscribeAlerts(activeRoom ?? "Room1", (rows) => setAlerts(rows));
+  }, [activeRoom, flushThrottled]);
 
-    // Alerts (works for either room-level or per-pipe alerts)
-    const unsubAlerts = subscribeAlerts(activeRoom ?? "Room1", (rows) => {
-      setAlerts(rows);
-    });
-
-    // Cleanup
+  // First mount
+  useEffect(() => {
+    attachAll();
     return () => {
-      console.log("[RT] unmounting screen—detaching listeners");
-      unsubs.forEach((u) => u());
-      perPipeUnsubs.forEach((u) => u());
-      unsubAlerts && unsubAlerts();
+      console.log("[RT] unmount → detachAll");
+      detachAll();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [attachAll, detachAll]);
 
+  // ====== Pull-to-refresh: full reset and reattach ======
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 800);
-  }, []);
+    // full reset state & listeners
+    detachAll();
+    latestMapRef.current = {};
+    setReadings([]);
+    setAlerts([]);
+    setLastError(null);
+    // small delay to ensure old listeners are detached
+    setTimeout(() => {
+      attachAll();
+      // stop spinner after first flush or a short timeout
+      setTimeout(() => setRefreshing(false), 500);
+    }, 50);
+  }, [attachAll, detachAll]);
 
+  // ====== UI ======
   const renderDashboard = () => {
     if (readings.length === 0) {
       return (
@@ -204,11 +229,14 @@ export default function RealTimeDataScreen() {
         </View>
       );
     }
-    const flows = readings.map((r) => r.flow_Lmin || 0);
-    const pressures = readings.map((r) => r.pressure_psi || 0);
 
+    const flows = readings.map((r) => r.flow_Lmin || 0);
+    const temps = readings.map((r) => r.temp_C || 0);
+    const pressures = readings.map((r) => r.pressure_psi || 0);
     const avgFlow = flows.reduce((a, b) => a + b, 0) / (flows.length || 1);
     const maxPressure = Math.max(...pressures);
+    const avgTemp = temps.reduce((a, b) => a + b, 0) / (temps.length || 1);
+    
 
     return (
       <View style={styles.dashboard}>
@@ -217,9 +245,14 @@ export default function RealTimeDataScreen() {
           <Text style={styles.cardValue}>{avgFlow.toFixed(1)} L/m</Text>
         </View>
         <View style={styles.card}>
+          <Text style={styles.cardTitleCenter}>Avg Temp</Text>
+          <Text style={styles.cardValue}>{avgTemp.toFixed(1)} °C</Text>
+        </View>
+        <View style={styles.card}>
           <Text style={styles.cardTitleCenter}>Max Pressure</Text>
           <Text style={styles.cardValue}>{maxPressure.toFixed(1)} PSI</Text>
         </View>
+        
         <View style={styles.card}>
           <Text style={styles.cardTitleCenter}>Critical Alerts</Text>
           <Text style={styles.cardValue}>{alerts.length}</Text>
@@ -233,7 +266,6 @@ export default function RealTimeDataScreen() {
     const flowStats = getStats(recent.map((r) => r.flow_Lmin));
     const pressureStats = getStats(recent.map((r) => r.pressure_psi));
     const tempStats = getStats(recent.map((r) => r.temp_C));
-
     return (
       <View style={styles.dataContainer}>
         <Text style={styles.sectionTitle}>Latest by Pipe</Text>
@@ -247,11 +279,9 @@ export default function RealTimeDataScreen() {
                 <Text style={styles.logText}>Flow: {r.flow_Lmin ?? "N/A"} L/min</Text>
                 <Text style={styles.logText}>Pressure: {r.pressure_psi ?? "N/A"} PSI</Text>
                 <Text style={styles.logText}>Temp: {r.temp_C ?? "N/A"} °C</Text>
-                {/* 👇 now shows milliseconds */}
                 <Text style={styles.timestamp}>{formatTimeWithMs(r.ts_server_ms)}</Text>
               </View>
             ))}
-
             <View style={styles.logItem}>
               <Text style={{ color: "#0bfffe", fontWeight: "bold", marginBottom: 10 }}>Summary</Text>
               <View style={styles.statRow}>
@@ -279,7 +309,6 @@ export default function RealTimeDataScreen() {
     );
   };
 
-  // Small debug panel so you can see what's happening without digging in Metro every time
   const renderDebug = () => (
     <View style={styles.debugBox}>
       <Text style={styles.debugTitle}>Debug</Text>
@@ -296,19 +325,15 @@ export default function RealTimeDataScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#111" }}>
-      <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        {/* Back Button */}
+      <ScrollView
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         <TouchableOpacity style={{ margin: 10, flexDirection: "row", alignItems: "center" }} onPress={() => router.back()}>
-          <FontAwesome name="arrow-left" size={20} color="#0bfffe" />
-          <Text style={{ color: "#0bfffe", marginLeft: 8 }}>Back</Text>
+          <FontAwesome name="arrow-left" size={25} color="#fff" />
         </TouchableOpacity>
 
-        {/* Title + Live Badge */}
         <View style={{ flexDirection: "row", alignItems: "center", marginLeft: 16, marginTop: 10 }}>
           <Text style={{ color: "#fff", fontSize: 24, fontWeight: "bold" }}>Real-Time Data</Text>
-          <Animated.View style={[styles.liveBadge]}>
-            <Text style={styles.liveText}>LIVE</Text>
-          </Animated.View>
         </View>
 
         {renderDashboard()}
@@ -343,8 +368,6 @@ const styles = StyleSheet.create({
   statRow: { flexDirection: "row", justifyContent: "space-between", marginVertical: 2 },
   statLabel: { color: "#aaa", fontWeight: "bold", width: 50 },
   statValue: { color: "#fff", width: 60, textAlign: "center" },
-  liveBadge: { marginLeft: 10, backgroundColor: "#ff1744", paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, alignSelf: "center" },
-  liveText: { color: "white", fontWeight: "bold", fontSize: 12 },
   debugBox: { margin: 10, backgroundColor: "#121826", borderRadius: 10, padding: 12 },
   debugTitle: { color: "#0bfffe", fontWeight: "bold", marginBottom: 6 },
   debugLine: { color: "#bbb", fontSize: 12, marginBottom: 2 },

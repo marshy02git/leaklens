@@ -71,9 +71,6 @@ export function subscribeAlerts(room: string, cb: (rows: AlertRow[]) => void) {
           (asnap) => {
             const aval = asnap.val() || {};
 
-            // (Optional) clear this pipe's old entries before re-adding to keep strict sync:
-            // Object.keys(alertsMap).forEach((k) => { if (k.startsWith(`${room}/${pipeKey}/`)) delete alertsMap[k]; });
-
             Object.keys(aval).forEach((alertId) => {
               const a = aval[alertId] || {};
               const key = `${room}/${pipeKey}/${alertId}`;

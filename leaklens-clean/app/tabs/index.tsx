@@ -47,12 +47,22 @@ export default function Index() {
           </TouchableOpacity>
         </Link>
 
-        <Link href="/ar" asChild>
-          <TouchableOpacity style={styles.card}>
-            <FontAwesome name="camera" size={20} color="#0bfffe" style={styles.cardIcon} />
-            <Text style={styles.cardLabel}>AR View</Text>
+        {/* AR with permission-checked handler */}
+        <TouchableOpacity style={styles.card} onPress={handleARButtonPress}>
+          <FontAwesome name="camera" size={20} color="#0bfffe" style={styles.cardIcon} />
+          <Text style={styles.cardLabel}>AR View</Text>
+        </TouchableOpacity>
+
+        {/* DEV-ONLY: QA Transition Test launcher */}
+        {__DEV__ && (
+          <TouchableOpacity
+            style={[styles.card, { borderColor: '#0bfffe', borderWidth: 1, backgroundColor: '#0bfffe22' }]}
+            onPress={() => router.push('/qa/transition-test')}
+          >
+            <FontAwesome name="flask" size={20} color="#0bfffe" style={styles.cardIcon} />
+            <Text style={styles.cardLabel}>QA: Transition Test</Text>
           </TouchableOpacity>
-        </Link>
+        )}
       </View>
     </ScrollView>
   );
@@ -70,7 +80,7 @@ const styles = StyleSheet.create({
     color: '#0bfffe',
     fontSize: 48,
     fontWeight: 'bold',
-    fontFamily: 'American Typewriter', // Optional: match previous style
+    fontFamily: 'American Typewriter',
     textAlign: 'center',
     marginBottom: 8,
   },
@@ -99,12 +109,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
   },
-  cardIcon: {
-    marginRight: 12,
-  },
-  cardLabel: {
-    fontSize: 18,
-    color: '#0bfffe',
-    fontWeight: '600',
-  },
+  cardIcon: { marginRight: 12 },
+  cardLabel: { fontSize: 18, color: '#0bfffe', fontWeight: '600' },
 });

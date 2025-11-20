@@ -1,26 +1,24 @@
 // app/_layout.tsx
-import "react-native-gesture-handler";              // <-- must be first
-import "../firebase/config";                        // ensure Firebase is initialized
+import "react-native-gesture-handler";
+import "../firebase/config";
 
-import React, { useEffect } from "react";
-import { Platform } from "react-native";
+import React, { useEffect, useState } from "react";
+import { Platform, View, ActivityIndicator } from "react-native";
 import { Stack } from "expo-router";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-
-// ---- Local notifications (works in Expo Go) ----
 import * as Notifications from "expo-notifications";
+import { getAuth, onAuthStateChanged, type User } from "firebase/auth";
 
-// ---- (Optional) Firebase Auth anon sign-in for RTDB rules auth != null ----
-import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
-
-// Show banners while app is foregrounded
+// ---- Notifications (safe defaults) ----
 Notifications.setNotificationHandler({
-  handleNotification: async () =>
-    ({
-      shouldShowAlert: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    } as Notifications.NotificationBehavior),
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    // newer Expo types:
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
 });
 
 function useLocalNotificationSetup() {
@@ -44,11 +42,9 @@ function useNotificationNavigation() {
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
       try {
-        const data = resp.notification.request.content.data as any;
-        // Lazy import to avoid circulars
+        // lazy import to avoid circular deps
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { router } = require("expo-router");
-        // You can route to a specific pipe later with params from `data`
         router.push("/realtimedata");
       } catch {}
     });
@@ -56,25 +52,40 @@ function useNotificationNavigation() {
   }, []);
 }
 
-function useAnonAuth() {
-  useEffect(() => {
-    const auth = getAuth();
-    const off = onAuthStateChanged(auth, (u) => {
-      if (!u) {
-        signInAnonymously(auth).catch((e) =>
-          console.warn("Anon sign-in failed:", e?.message || e)
-        );
-      }
-    });
-    return off;
-  }, []);
-}
-
 export default function RootLayout() {
   useLocalNotificationSetup();
   useNotificationNavigation();
-  useAnonAuth(); // remove if your RTDB rules are public-read
 
+  const [user, setUser] = useState<User | null | undefined>(undefined); // undefined = loading
+
+  useEffect(() => {
+    const auth = getAuth();
+    return onAuthStateChanged(auth, (u) => setUser(u ?? null));
+  }, []);
+
+  // 1) Loading gate: show a stable splash (no navigation here)
+  if (user === undefined) {
+    return (
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={{ flex: 1, backgroundColor: "#121212", alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color="#0bfffe" />
+        </View>
+      </GestureHandlerRootView>
+    );
+  }
+
+  // 2) Signed OUT: render a stack that ONLY contains /login
+  if (!user) {
+    return (
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="login" />
+        </Stack>
+      </GestureHandlerRootView>
+    );
+  }
+
+  // 3) Signed IN: render your full app stack
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <Stack screenOptions={{ headerShown: false }}>
@@ -85,8 +96,8 @@ export default function RootLayout() {
         <Stack.Screen name="realtimedata" />
         <Stack.Screen name="pipe/[pipe]" />
         <Stack.Screen name="index" />
-        <Stack.Screen name="qa"/>
-
+        <Stack.Screen name="qa" />
+        <Stack.Screen name="login" /> {/* keep routable, but users won’t see it when signed in */}
       </Stack>
     </GestureHandlerRootView>
   );

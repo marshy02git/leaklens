@@ -21,6 +21,10 @@ import { ref, onValue, off, query, limitToLast } from "firebase/database";
 import { subscribeAlerts } from "../firebase/db";
 import Svg, { Path, Line } from "react-native-svg";
 
+// ---------- Fixed selection ----------
+const ROOMS = ["Room6", "Room4", "Room1"] as const;
+const PIPE_FILTER = "Pipe2"; // only show this pipe for each room
+
 // Enable LayoutAnimation on Android
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -51,9 +55,11 @@ type PipeState = {
 };
 
 type RoomState = {
-  pipes: string[];
+  pipes: string[]; // we’ll keep ["Pipe2"] for each room
   map: Record<string, PipeState>;
 };
+
+type RoomsBundleState = Record<string, RoomState>;
 
 const MAX_POINTS = 120;
 
@@ -156,161 +162,157 @@ function Sparkline({
 export default function RealTimeDataScreen() {
   const router = useRouter();
 
-  const [room, setRoom] = useState<string | null>(null);
+  // multi-room state (each room has only Pipe2)
+  const [roomsState, setRoomsState] = useState<RoomsBundleState>(() => {
+    const init: RoomsBundleState = {};
+    ROOMS.forEach((r) => {
+      init[r] = {
+        pipes: [PIPE_FILTER],
+        map: {
+          [PIPE_FILTER]: {
+            latest: undefined,
+            history: [],
+            stats: { min: {}, max: {}, avg: {} } as any,
+            expanded: false,
+          },
+        },
+      };
+    });
+    return init;
+  });
+
   const [alertsCount, setAlertsCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [roomState, setRoomState] = useState<RoomState>({ pipes: [], map: {} });
-
-  // Unsubs
-  const devicesUnsubRef = useRef<null | (() => void)>(null);
-  const roomUnsubRef = useRef<null | (() => void)>(null);
+  // Unsubs per room/pipe
   const latestUnsubsRef = useRef<Record<string, () => void>>({});
   const historyUnsubsRef = useRef<Record<string, () => void>>({});
-  const alertsUnsubRef = useRef<null | (() => void)>(null);
+  const alertsUnsubsRef = useRef<Record<string, () => void>>({});
 
-  // ---- navigation helper (moved INSIDE component) ----
+  const key = (room: string, pipe: string, kind: "L" | "H") => `${kind}:${room}:${pipe}`;
+
+  // navigation to detail
   const goToPipe = useCallback(
-    (pipeKey: string) => {
+    (room: string, pipeKey: string) => {
       router.push({
         pathname: "/pipe/[pipe]",
-        params: { pipe: pipeKey, room: room ?? "Room1" },
+        params: { pipe: pipeKey, room },
       } as never);
     },
-    [router, room]
+    [router]
   );
 
   const detachAll = useCallback(() => {
-    devicesUnsubRef.current?.();
-    roomUnsubRef.current?.();
     Object.values(latestUnsubsRef.current).forEach((u) => u());
     Object.values(historyUnsubsRef.current).forEach((u) => u());
-    alertsUnsubRef.current?.();
+    Object.values(alertsUnsubsRef.current).forEach((u) => u());
 
-    devicesUnsubRef.current = null;
-    roomUnsubRef.current = null;
     latestUnsubsRef.current = {};
     historyUnsubsRef.current = {};
-    alertsUnsubRef.current = null;
+    alertsUnsubsRef.current = {};
   }, []);
 
   const attachAll = useCallback(() => {
-    const devicesRef = ref(rtdb, "Devices");
-    devicesUnsubRef.current = onValue(
-      devicesRef,
-      (snap) => {
-        const devicesVal = snap.val() || {};
-        const rooms = Object.keys(devicesVal);
-        const chosen = room && rooms.includes(room) ? room : rooms[0] ?? null;
-        setRoom(chosen);
+    // attach 3 rooms × 1 pipe listeners
+    ROOMS.forEach((roomName) => {
+      const pipeKey = PIPE_FILTER;
 
-        if (!chosen) {
-          setRoomState({ pipes: [], map: {} });
-          return;
-        }
+      // Latest
+      const latestRef = ref(rtdb, `Devices/${roomName}/${pipeKey}/Latest`);
+      const lu = onValue(
+        latestRef,
+        (snap) => {
+          const v = (snap.val() || {}) as LatestReading;
+          setRoomsState((prev) => {
+            const cur = prev[roomName] ?? { pipes: [pipeKey], map: {} as any };
+            const ps = cur.map[pipeKey] ?? {
+              latest: undefined,
+              history: [],
+              stats: { min: {}, max: {}, avg: {} } as any,
+              expanded: false,
+            };
+            return {
+              ...prev,
+              [roomName]: {
+                pipes: [pipeKey],
+                map: { ...cur.map, [pipeKey]: { ...ps, latest: v } },
+              },
+            };
+          });
+        },
+        (err) => setError(`Latest ${roomName}/${pipeKey}: ${err?.message ?? "unknown"}`)
+      );
+      latestUnsubsRef.current[key(roomName, pipeKey, "L")] = () => off(latestRef, "value", lu);
 
-        const chosenRef = ref(rtdb, `Devices/${chosen}`);
-        roomUnsubRef.current?.();
-        roomUnsubRef.current = onValue(
-          chosenRef,
-          (rsnap) => {
-            const roomVal = rsnap.val() || {};
-            const pipeKeys = Object.keys(roomVal);
+      // History
+      const readingsQ = query(
+        ref(rtdb, `Devices/${roomName}/${pipeKey}/Readings`),
+        limitToLast(MAX_POINTS)
+      );
+      const hu = onValue(
+        readingsQ,
+        (snap) => {
+          const val = snap.val() || {};
+          const points: HistoryPoint[] = Object.keys(val)
+            .sort()
+            .map((k) => ({ ts_key: k, ...(val[k] || {}) }));
 
-            // Unsubscribe removed pipes
-            Object.keys(latestUnsubsRef.current).forEach((k) => {
-              if (!pipeKeys.includes(k)) {
-                latestUnsubsRef.current[k]?.();
-                delete latestUnsubsRef.current[k];
-              }
-            });
-            Object.keys(historyUnsubsRef.current).forEach((k) => {
-              if (!pipeKeys.includes(k)) {
-                historyUnsubsRef.current[k]?.();
-                delete historyUnsubsRef.current[k];
-              }
-            });
+          const stats = calcStats(points);
+          setRoomsState((prev) => {
+            const cur = prev[roomName] ?? { pipes: [pipeKey], map: {} as any };
+            const ps = cur.map[pipeKey] ?? {
+              latest: undefined,
+              history: [],
+              stats: { min: {}, max: {}, avg: {} } as any,
+              expanded: false,
+            };
+            return {
+              ...prev,
+              [roomName]: {
+                pipes: [pipeKey],
+                map: { ...cur.map, [pipeKey]: { ...ps, history: points, stats } },
+              },
+            };
+          });
+        },
+        (err) => setError(`Readings ${roomName}/${pipeKey}: ${err?.message ?? "unknown"}`)
+      );
+      historyUnsubsRef.current[key(roomName, pipeKey, "H")] = () => off(readingsQ, "value", hu);
 
-            setRoomState((prev) => {
-              const next: RoomState = { pipes: pipeKeys, map: { ...prev.map } };
-              pipeKeys.forEach((k) => {
-                if (!next.map[k]) {
-                  next.map[k] = {
-                    latest: undefined,
-                    history: [],
-                    stats: { min: {}, max: {}, avg: {} } as any,
-                    expanded: false,
-                  };
-                }
-              });
-              return next;
-            });
+      // Alerts (per-room), then sum later
+      alertsUnsubsRef.current[roomName]?.();
+      alertsUnsubsRef.current[roomName] = subscribeAlerts(roomName, () => {
+        // We'll recompute a total below; do nothing here
+      });
+    });
 
-            // Attach per-pipe listeners
-            pipeKeys.forEach((pipeKey) => {
-              if (!latestUnsubsRef.current[pipeKey]) {
-                const latestRef = ref(rtdb, `Devices/${chosen}/${pipeKey}/Latest`);
-                const u = onValue(
-                  latestRef,
-                  (lsnap) => {
-                    const v = (lsnap.val() || {}) as LatestReading;
-                    setRoomState((prev) => {
-                      const cur = prev.map[pipeKey] ?? {
-                        history: [],
-                        stats: { min: {}, max: {}, avg: {} } as any,
-                        expanded: false,
-                      };
-                      const map = { ...prev.map, [pipeKey]: { ...cur, latest: v } };
-                      return { pipes: prev.pipes, map };
-                    });
-                  },
-                  (err) => setError(`Latest ${pipeKey}: ${err?.message ?? "unknown"}`)
-                );
-                latestUnsubsRef.current[pipeKey] = () => off(latestRef, "value", u);
-              }
+    // Aggregate alert counts across selected rooms
+    // (re-attach a combined listener by summing on changes)
+    // We’ll just poll each subscribeAlerts callback by calling it once here:
+    let total = 0;
+    const perRoomUnsubs: Array<() => void> = [];
+    ROOMS.forEach((roomName) => {
+      const offRoom = subscribeAlerts(roomName, (rows) => {
+        // naive: on any update, re-sum everything by triggering per room again
+        // (subscribeAlerts likely calls back with the full current rows already)
+        // So compute current room total and re-sum quickly
+        let sum = 0;
+        // we can’t query others here; just set to rows length and then sum later
+        // Keep a small cache:
+        roomAlertCache[roomName] = rows.length;
+        sum = Object.values(roomAlertCache).reduce((a, b) => a + b, 0);
+        setAlertsCount(sum);
+      });
+      perRoomUnsubs.push(offRoom);
+    });
+    // Store a way to remove these extra listeners on detach:
+    alertsUnsubsRef.current["__AGG__"] = () => perRoomUnsubs.forEach((f) => f());
+  }, []);
 
-              if (!historyUnsubsRef.current[pipeKey]) {
-                const readingsQ = query(
-                  ref(rtdb, `Devices/${chosen}/${pipeKey}/Readings`),
-                  limitToLast(MAX_POINTS)
-                );
-                const u = onValue(
-                  readingsQ,
-                  (hsnap) => {
-                    const val = hsnap.val() || {};
-                    const points: HistoryPoint[] = Object.keys(val)
-                      .sort()
-                      .map((k) => ({ ts_key: k, ...(val[k] || {}) }));
-
-                    const stats = calcStats(points);
-                    setRoomState((prev) => {
-                      const cur = prev.map[pipeKey] ?? {
-                        latest: undefined,
-                        history: [],
-                        stats: { min: {}, max: {}, avg: {} } as any,
-                        expanded: false,
-                      };
-                      const map = { ...prev.map, [pipeKey]: { ...cur, history: points, stats } };
-                      return { pipes: prev.pipes, map };
-                    });
-                  },
-                  (err) => setError(`Readings ${pipeKey}: ${err?.message ?? "unknown"}`)
-                );
-                historyUnsubsRef.current[pipeKey] = () => off(readingsQ, "value", u);
-              }
-            });
-          },
-          (err) => setError(`Room: ${err?.message ?? "unknown"}`)
-        );
-      },
-      (err) => setError(`Devices: ${err?.message ?? "unknown"}`)
-    );
-
-    // Alerts (dashboard count)
-    alertsUnsubRef.current?.();
-    alertsUnsubRef.current = subscribeAlerts(room ?? "Room1", (rows) => setAlertsCount(rows.length));
-  }, [room]);
+  // Simple in-memory cache for per-room alert counts
+  const roomAlertCacheRef = useRef<Record<string, number>>({});
+  const roomAlertCache = roomAlertCacheRef.current;
 
   // Focus attach/detach
   useFocusEffect(
@@ -329,31 +331,39 @@ export default function RealTimeDataScreen() {
     }, 50);
   }, [attachAll, detachAll]);
 
-  const toggleExpanded = useCallback((pipeKey: string) => {
+  const toggleExpanded = useCallback((roomName: string, pipeKey: string) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setRoomState((prev) => {
-      const cur = prev.map[pipeKey];
+    setRoomsState((prev) => {
+      const curRoom = prev[roomName];
+      if (!curRoom) return prev;
+      const cur = curRoom.map[pipeKey];
       if (!cur) return prev;
       return {
-        pipes: prev.pipes,
-        map: {
-          ...prev.map,
-          [pipeKey]: { ...cur, expanded: !cur.expanded },
+        ...prev,
+        [roomName]: {
+          pipes: curRoom.pipes,
+          map: { ...curRoom.map, [pipeKey]: { ...cur, expanded: !cur.expanded } },
         },
       };
     });
   }, []);
 
-  /* ---------- UI ---------- */
-  const renderPipeCard = (pipeKey: string) => {
-    const ps = roomState.map[pipeKey];
+  /* ---------- UI helpers ---------- */
+  const PipeCard = ({
+    roomName,
+    pipeKey,
+  }: {
+    roomName: string;
+    pipeKey: string;
+  }) => {
+    const ps = roomsState[roomName]?.map[pipeKey];
     const lt = ps?.latest;
     const st = ps?.stats;
 
     return (
-      <View key={pipeKey} style={styles.cardWrap}>
+      <View style={styles.cardWrap}>
         {/* Header row navigates to detail */}
-        <TouchableOpacity style={styles.cardHead} onPress={() => goToPipe(pipeKey)}>
+        <TouchableOpacity style={styles.cardHead} onPress={() => goToPipe(roomName, pipeKey)}>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <FontAwesome name="tint" size={16} color="#0bfffe" />
             <Text style={styles.cardHeadTitle}>{pipeKey}</Text>
@@ -368,7 +378,7 @@ export default function RealTimeDataScreen() {
           <Text style={styles.latestItem}>Pressure: {fmt(num(lt?.pressure_psi), " PSI")}</Text>
         </View>
         <Text style={styles.latestTs}>
-          Updated: {formatTimeWithMs(num(lt?.ts_server_ms) ?? Date.now())}
+          Updated: {formatTimeWithMs(num(lt?.ts_server_ms) ?? lt?.t_ms ?? undefined)}
         </Text>
 
         {/* Collapsed preview */}
@@ -433,19 +443,31 @@ export default function RealTimeDataScreen() {
             ))}
           </View>
         )}
+
+        {/* Expand/Collapse */}
+        <TouchableOpacity
+          onPress={() => toggleExpanded(roomName, pipeKey)}
+          style={{ marginTop: 8, alignSelf: "flex-start" }}
+        >
+          <Text style={{ color: "#0bfffe" }}>{ps?.expanded ? "Collapse" : "Expand"}</Text>
+        </TouchableOpacity>
       </View>
     );
   };
 
   const dashboard = useMemo(() => {
-    const all = roomState.pipes.flatMap((k) =>
-      roomState.map[k]?.latest ? [roomState.map[k]!.latest!] : []
-    );
-    if (all.length === 0) return null;
+    // Flatten latests across the three rooms
+    const allLatest: LatestReading[] = [];
+    ROOMS.forEach((r) => {
+      const lt = roomsState[r]?.map[PIPE_FILTER]?.latest;
+      if (lt) allLatest.push(lt);
+    });
+    if (allLatest.length === 0) return null;
+
     const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-    const flows = all.map((x) => num(x.flow_Lmin, 0) as number);
-    const temps = all.map((x) => num(x.temp_C, 0) as number);
-    const press = all.map((x) => num(x.pressure_psi, 0) as number);
+    const flows = allLatest.map((x) => num(x.flow_Lmin, 0) as number);
+    const temps = allLatest.map((x) => num(x.temp_C, 0) as number);
+    const press = allLatest.map((x) => num(x.pressure_psi, 0) as number);
 
     return (
       <View style={styles.dashboard}>
@@ -467,7 +489,7 @@ export default function RealTimeDataScreen() {
         </View>
       </View>
     );
-  }, [roomState, alertsCount]);
+  }, [roomsState, alertsCount]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#111" }}>
@@ -486,7 +508,7 @@ export default function RealTimeDataScreen() {
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Real-Time Data</Text>
           </View>
-          {room ? <Text style={styles.roomPill}>{room}</Text> : <View />}
+          <Text style={styles.roomPill}>Room6 • Room4 • Room1 · {PIPE_FILTER}</Text>
         </View>
 
         {/* Dashboard */}
@@ -496,14 +518,15 @@ export default function RealTimeDataScreen() {
           </View>
         )}
 
-        {/* Pipes list */}
+        {/* Per-room sections */}
         <View style={{ paddingHorizontal: 12, paddingBottom: 24 }}>
           <Text style={styles.sectionTitle}>Pipes</Text>
-          {roomState.pipes.length === 0 ? (
-            <Text style={{ color: "#888", marginLeft: 4 }}>No pipes found.</Text>
-          ) : (
-            roomState.pipes.map(renderPipeCard)
-          )}
+          {ROOMS.map((roomName) => (
+            <View key={roomName} style={{ marginTop: 10 }}>
+              <Text style={styles.roomHeader}>{roomName}</Text>
+              <PipeCard roomName={roomName} pipeKey={PIPE_FILTER} />
+            </View>
+          ))}
         </View>
 
         {/* Error */}
@@ -562,6 +585,13 @@ const styles = StyleSheet.create({
     borderBottomColor: "#0bfffe",
     paddingBottom: 4,
     marginHorizontal: 4,
+  },
+
+  roomHeader: {
+    color: "#bbb",
+    fontSize: 14,
+    marginLeft: 6,
+    marginBottom: 6,
   },
 
   cardWrap: {

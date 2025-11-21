@@ -10,15 +10,14 @@ import {
   Platform,
   Alert,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { FontAwesome } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
 
-import { rtdb } from "../firebase/config";
+import { rtdb, auth } from "../firebase/config";
 import { ref, onValue, off, push, set } from "firebase/database";
-
-import { getAuth, onAuthStateChanged, type User } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 
 /* ----------------- helpers ----------------- */
 const formatTimeWithMs = (ms?: number) => {
@@ -53,6 +52,7 @@ type AlertRow = {
 /* ----------------- screen ----------------- */
 export default function NotificationLogsScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ room?: string; pipe?: string }>();
 
   const [user, setUser] = useState<User | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -60,6 +60,8 @@ export default function NotificationLogsScreen() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [statusIndex, setStatusIndex] = useState(0);
   const lastRefresh = useRef<number>(Date.now());
+
+  const openedFromNotification = !!(params.room || params.pipe);
 
   // notifications perms (ok even if also done in _layout)
   useEffect(() => {
@@ -77,9 +79,9 @@ export default function NotificationLogsScreen() {
     })();
   }, []);
 
-  // watch auth
+  // watch auth (✅ use shared auth from config)
   useEffect(() => {
-    const offAuth = onAuthStateChanged(getAuth(), (u) => setUser(u ?? null));
+    const offAuth = onAuthStateChanged(auth, (u) => setUser(u ?? null));
     return offAuth;
   }, []);
 
@@ -171,7 +173,11 @@ export default function NotificationLogsScreen() {
         content: {
           title: "LeakLens • Test",
           body: "Manual test notification",
-          data: { room: "Room6", pipe: "Pipe2" },
+          data: {
+            screen: "notificationlogs",
+            room: "Room6",
+            pipe: "Pipe2",
+          },
         },
         trigger: null,
       });
@@ -195,6 +201,18 @@ export default function NotificationLogsScreen() {
           </TouchableOpacity>
           <Text style={styles.title}>Notifications</Text>
         </View>
+
+        {/* If opened from a notification, show quick context */}
+        {openedFromNotification && (
+          <View style={styles.openedFromBanner}>
+            <FontAwesome name="bell" size={14} color="#0bfffe" />
+            <Text style={styles.openedFromText}>
+              Opened from alert
+              {params.room ? ` • ${params.room}` : ""}
+              {params.pipe ? ` / ${params.pipe}` : ""}
+            </Text>
+          </View>
+        )}
 
         {/* Auth line */}
         <Text style={styles.subheading}>
@@ -222,7 +240,12 @@ export default function NotificationLogsScreen() {
             style={[styles.statusContainer, { backgroundColor: currentStatus.color }]}
             onPress={handleStatusPress}
           >
-            <FontAwesome name={currentStatus.icon} size={20} color="white" style={{ marginRight: 10 }} />
+            <FontAwesome
+              name={currentStatus.icon}
+              size={20}
+              color="white"
+              style={{ marginRight: 10 }}
+            />
             <Text style={styles.statusText}>{currentStatus.label}</Text>
           </TouchableOpacity>
         </View>
@@ -295,6 +318,19 @@ const styles = StyleSheet.create({
   },
   backButton: { paddingRight: 10 },
   title: { fontSize: 24, fontWeight: "bold", color: "white" },
+
+  openedFromBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1a1f2a",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  openedFromText: { color: "#0bfffe", fontSize: 12, marginLeft: 6 },
+
   subheading: { fontSize: 12, color: "#aaa", marginBottom: 10, marginLeft: 4 },
 
   badgeRow: { flexDirection: "row", gap: 8, marginLeft: 4, marginBottom: 8 },

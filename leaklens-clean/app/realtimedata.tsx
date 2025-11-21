@@ -17,13 +17,22 @@ import { FontAwesome } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { rtdb } from "../firebase/config";
-import { ref, onValue, off, query, limitToLast } from "firebase/database";
+import { ref, onValue, off, query, limitToLast, push, set } from "firebase/database";
 import { subscribeAlerts } from "../firebase/db";
 import Svg, { Path, Line } from "react-native-svg";
 
 // ---------- Fixed selection ----------
 const ROOMS = ["Room6", "Room4", "Room1"] as const;
 const PIPE_FILTER = "Pipe2"; // only show this pipe for each room
+
+// ---------- Simple thresholds for auto-alerts ----------
+// Tune these to match your test rig.
+const FLOW_CRITICAL_LMIN = 11.0;
+const PRESS_CRITICAL_PSI = 3.0;
+const TEMP_CRITICAL_C = 30.0;
+
+// Cooldown between auto alerts for the same room/pipe
+const ALERT_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -55,11 +64,13 @@ type PipeState = {
 };
 
 type RoomState = {
-  pipes: string[]; // we’ll keep ["Pipe2"] for each room
+  pipes: string[];
   map: Record<string, PipeState>;
 };
 
 type RoomsBundleState = Record<string, RoomState>;
+
+type AlertLevel = "info" | "caution" | "critical";
 
 const MAX_POINTS = 120;
 
@@ -109,6 +120,51 @@ const formatTimeWithMs = (ms?: number) => {
       3
     )}`;
   }
+};
+
+/** Decide alert severity based on latest reading. Very simple logic. */
+const computeSeverity = (r?: LatestReading): AlertLevel => {
+  if (!r) return "info";
+
+  const flow = num(r.flow_Lmin, 0) as number;
+  const press = num(r.pressure_psi, 0) as number;
+  const temp = num(r.temp_C, 0) as number;
+
+  if (flow > FLOW_CRITICAL_LMIN || press > PRESS_CRITICAL_PSI || temp > TEMP_CRITICAL_C) {
+    return "critical";
+  }
+
+  // you could add a "caution" band here later
+  return "info";
+};
+
+/** Builds a simple message describing why the reading is critical. */
+const buildCriticalMessage = (r: LatestReading): string => {
+  const parts: string[] = [];
+  if (typeof r.flow_Lmin === "number" && r.flow_Lmin > FLOW_CRITICAL_LMIN) {
+    parts.push(`High flow ${r.flow_Lmin.toFixed(2)} L/min`);
+  }
+  if (typeof r.pressure_psi === "number" && r.pressure_psi > PRESS_CRITICAL_PSI) {
+    parts.push(`High pressure ${r.pressure_psi.toFixed(2)} PSI`);
+  }
+  if (typeof r.temp_C === "number" && r.temp_C > TEMP_CRITICAL_C) {
+    parts.push(`High temp ${r.temp_C.toFixed(1)} °C`);
+  }
+  return parts.join(", ") || "Critical condition detected";
+};
+
+/** Writes a critical alert to RTDB (where notifications + logs pick it up). */
+const writeCriticalAlert = (roomName: string, pipeKey: string, reading: LatestReading) => {
+  const alertsRoot = ref(rtdb, `Alerts/${roomName}`);
+  const newRef = push(alertsRoot);
+  const now = Date.now();
+  return set(newRef, {
+    level: "critical",
+    message: buildCriticalMessage(reading),
+    room: roomName,
+    pipe: pipeKey,
+    ts_server_ms: now,
+  });
 };
 
 /* ---------- Tiny Sparkline ---------- */
@@ -162,7 +218,6 @@ function Sparkline({
 export default function RealTimeDataScreen() {
   const router = useRouter();
 
-  // multi-room state (each room has only Pipe2)
   const [roomsState, setRoomsState] = useState<RoomsBundleState>(() => {
     const init: RoomsBundleState = {};
     ROOMS.forEach((r) => {
@@ -189,10 +244,16 @@ export default function RealTimeDataScreen() {
   const latestUnsubsRef = useRef<Record<string, () => void>>({});
   const historyUnsubsRef = useRef<Record<string, () => void>>({});
   const alertsUnsubsRef = useRef<Record<string, () => void>>({});
+  const roomAlertCacheRef = useRef<Record<string, number>>({});
+
+  // For auto-alert logic
+  const lastSeverityRef = useRef<Record<string, AlertLevel | undefined>>({});
+  const hasSeenInitialRef = useRef<Record<string, boolean>>({});
+  const lastAlertAtRef = useRef<Record<string, number>>({});
 
   const key = (room: string, pipe: string, kind: "L" | "H") => `${kind}:${room}:${pipe}`;
+  const rpKey = (room: string, pipe: string) => `${room}/${pipe}`;
 
-  // navigation to detail
   const goToPipe = useCallback(
     (room: string, pipeKey: string) => {
       router.push({
@@ -204,17 +265,30 @@ export default function RealTimeDataScreen() {
   );
 
   const detachAll = useCallback(() => {
-    Object.values(latestUnsubsRef.current).forEach((u) => u());
-    Object.values(historyUnsubsRef.current).forEach((u) => u());
-    Object.values(alertsUnsubsRef.current).forEach((u) => u());
+    Object.values(latestUnsubsRef.current).forEach((u) => u && u());
+    Object.values(historyUnsubsRef.current).forEach((u) => u && u());
+    Object.values(alertsUnsubsRef.current).forEach((u) => u && u());
 
     latestUnsubsRef.current = {};
     historyUnsubsRef.current = {};
     alertsUnsubsRef.current = {};
+
+    // reset alert cache and UI count when leaving screen
+    roomAlertCacheRef.current = {};
+    lastSeverityRef.current = {};
+    hasSeenInitialRef.current = {};
+    lastAlertAtRef.current = {};
+    setAlertsCount(0);
   }, []);
 
   const attachAll = useCallback(() => {
-    // attach 3 rooms × 1 pipe listeners
+    // reset cache and count on each re-attach so we don't keep stale values
+    roomAlertCacheRef.current = {};
+    lastSeverityRef.current = {};
+    hasSeenInitialRef.current = {};
+    lastAlertAtRef.current = {};
+    setAlertsCount(0);
+
     ROOMS.forEach((roomName) => {
       const pipeKey = PIPE_FILTER;
 
@@ -224,6 +298,9 @@ export default function RealTimeDataScreen() {
         latestRef,
         (snap) => {
           const v = (snap.val() || {}) as LatestReading;
+          const thisRPKey = rpKey(roomName, pipeKey);
+
+          // ---- Update UI state ----
           setRoomsState((prev) => {
             const cur = prev[roomName] ?? { pipes: [pipeKey], map: {} as any };
             const ps = cur.map[pipeKey] ?? {
@@ -240,6 +317,37 @@ export default function RealTimeDataScreen() {
               },
             };
           });
+
+          // ---- Auto-generate critical alerts based on latest ----
+          const sev = computeSeverity(v);
+          const prevSev = lastSeverityRef.current[thisRPKey];
+          const hasSeenInitial = hasSeenInitialRef.current[thisRPKey];
+
+          // If this is the first reading we've seen for this room/pipe
+          // while this screen is mounted, just record the severity and bail.
+          // This avoids generating an alert just because we opened the screen
+          // while it was already critical.
+          if (!hasSeenInitial) {
+            hasSeenInitialRef.current[thisRPKey] = true;
+            lastSeverityRef.current[thisRPKey] = sev;
+          } else {
+            // Only fire when we newly cross into "critical"
+            if (sev === "critical" && prevSev !== "critical") {
+              const now = Date.now();
+              const last = lastAlertAtRef.current[thisRPKey] ?? 0;
+
+              // Rate-limit: don't send more than one auto alert
+              // per ALERT_COOLDOWN_MS per room/pipe.
+              if (now - last > ALERT_COOLDOWN_MS) {
+                lastAlertAtRef.current[thisRPKey] = now;
+                writeCriticalAlert(roomName, pipeKey, v).catch((e) => {
+                  console.warn("Failed to write auto critical alert:", e);
+                });
+              }
+            }
+
+            lastSeverityRef.current[thisRPKey] = sev;
+          }
         },
         (err) => setError(`Latest ${roomName}/${pipeKey}: ${err?.message ?? "unknown"}`)
       );
@@ -280,41 +388,27 @@ export default function RealTimeDataScreen() {
       );
       historyUnsubsRef.current[key(roomName, pipeKey, "H")] = () => off(readingsQ, "value", hu);
 
-      // Alerts (per-room), then sum later
-      alertsUnsubsRef.current[roomName]?.();
-      alertsUnsubsRef.current[roomName] = subscribeAlerts(roomName, () => {
-        // We'll recompute a total below; do nothing here
-      });
-    });
+      // Alerts count per room (only critical)
+      if (alertsUnsubsRef.current[roomName]) {
+        alertsUnsubsRef.current[roomName]!();
+      }
+      alertsUnsubsRef.current[roomName] = subscribeAlerts(roomName, (rows: any[]) => {
+        const criticalCount = Array.isArray(rows)
+          ? rows.filter((a: any) => a?.level === "critical").length
+          : 0;
 
-    // Aggregate alert counts across selected rooms
-    // (re-attach a combined listener by summing on changes)
-    // We’ll just poll each subscribeAlerts callback by calling it once here:
-    let total = 0;
-    const perRoomUnsubs: Array<() => void> = [];
-    ROOMS.forEach((roomName) => {
-      const offRoom = subscribeAlerts(roomName, (rows) => {
-        // naive: on any update, re-sum everything by triggering per room again
-        // (subscribeAlerts likely calls back with the full current rows already)
-        // So compute current room total and re-sum quickly
-        let sum = 0;
-        // we can’t query others here; just set to rows length and then sum later
-        // Keep a small cache:
-        roomAlertCache[roomName] = rows.length;
-        sum = Object.values(roomAlertCache).reduce((a, b) => a + b, 0);
-        setAlertsCount(sum);
+        roomAlertCacheRef.current[roomName] = criticalCount;
+
+        const total = Object.values(roomAlertCacheRef.current).reduce(
+          (a, b) => a + (b || 0),
+          0
+        );
+        setAlertsCount(total);
       });
-      perRoomUnsubs.push(offRoom);
     });
-    // Store a way to remove these extra listeners on detach:
-    alertsUnsubsRef.current["__AGG__"] = () => perRoomUnsubs.forEach((f) => f());
   }, []);
 
-  // Simple in-memory cache for per-room alert counts
-  const roomAlertCacheRef = useRef<Record<string, number>>({});
-  const roomAlertCache = roomAlertCacheRef.current;
-
-  // Focus attach/detach
+  // Attach/detach on focus
   useFocusEffect(
     useCallback(() => {
       attachAll();
@@ -349,13 +443,7 @@ export default function RealTimeDataScreen() {
   }, []);
 
   /* ---------- UI helpers ---------- */
-  const PipeCard = ({
-    roomName,
-    pipeKey,
-  }: {
-    roomName: string;
-    pipeKey: string;
-  }) => {
+  const PipeCard = ({ roomName, pipeKey }: { roomName: string; pipeKey: string }) => {
     const ps = roomsState[roomName]?.map[pipeKey];
     const lt = ps?.latest;
     const st = ps?.stats;
@@ -375,7 +463,9 @@ export default function RealTimeDataScreen() {
         <View style={styles.latestRow}>
           <Text style={styles.latestItem}>Flow: {fmt(num(lt?.flow_Lmin), " L/min")}</Text>
           <Text style={styles.latestItem}>Temp: {fmt(num(lt?.temp_C), " °C")}</Text>
-          <Text style={styles.latestItem}>Pressure: {fmt(num(lt?.pressure_psi), " PSI")}</Text>
+          <Text style={styles.latestItem}>
+            Pressure: {fmt(num(lt?.pressure_psi), " PSI")}
+          </Text>
         </View>
         <Text style={styles.latestTs}>
           Updated: {formatTimeWithMs(num(lt?.ts_server_ms) ?? lt?.t_ms ?? undefined)}
@@ -386,21 +476,35 @@ export default function RealTimeDataScreen() {
           <View style={styles.previewRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.previewStat}>
-                Min {fmt(num(st?.min.flow_Lmin), " L/m")} • Avg {fmt(num(st?.avg.flow_Lmin), " L/m")} • Max {fmt(num(st?.max.flow_Lmin), " L/m")}
+                Min {fmt(num(st?.min.flow_Lmin), " L/m")} • Avg{" "}
+                {fmt(num(st?.avg.flow_Lmin), " L/m")} • Max{" "}
+                {fmt(num(st?.max.flow_Lmin), " L/m")}
               </Text>
             </View>
-            <Sparkline data={ps?.history ?? []} accessor={(p) => p.flow_Lmin} width={140} height={40} />
+            <Sparkline
+              data={ps?.history ?? []}
+              accessor={(p) => p.flow_Lmin}
+              width={140}
+              height={40}
+            />
           </View>
         )}
 
         {/* Expanded content */}
         {ps?.expanded && (
           <View style={styles.expandedBox}>
-            <Text style={styles.sectionLabel}>Flow (last {Math.min(ps.history.length, MAX_POINTS)} pts)</Text>
+            <Text style={styles.sectionLabel}>
+              Flow (last {Math.min(ps.history.length, MAX_POINTS)} pts)
+            </Text>
             <Sparkline data={ps.history} accessor={(p) => p.flow_Lmin} width={260} height={64} />
 
             <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Pressure</Text>
-            <Sparkline data={ps.history} accessor={(p) => p.pressure_psi} width={260} height={64} />
+            <Sparkline
+              data={ps.history}
+              accessor={(p) => p.pressure_psi}
+              width={260}
+              height={64}
+            />
 
             <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Temperature</Text>
             <Sparkline data={ps.history} accessor={(p) => p.temp_C} width={260} height={64} />
@@ -435,9 +539,12 @@ export default function RealTimeDataScreen() {
             <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Recent Log</Text>
             {(ps.history.slice(-12) || []).map((p) => (
               <View key={p.ts_key} style={styles.logRow}>
-                <Text style={styles.logText}>{p.ts_key.replace(/T/, " ").replace(/_/g, ":")}</Text>
+                <Text style={styles.logText}>
+                  {p.ts_key.replace(/T/, " ").replace(/_/g, ":")}
+                </Text>
                 <Text style={styles.logTextSm}>
-                  F:{fmt(num(p.flow_Lmin), "", 2)}  P:{fmt(num(p.pressure_psi), "", 1)}  T:{fmt(num(p.temp_C), "", 1)}
+                  F:{fmt(num(p.flow_Lmin), "", 2)}  P:{fmt(num(p.pressure_psi), "", 1)}  T:
+                  {fmt(num(p.temp_C), "", 1)}
                 </Text>
               </View>
             ))}
@@ -456,7 +563,6 @@ export default function RealTimeDataScreen() {
   };
 
   const dashboard = useMemo(() => {
-    // Flatten latests across the three rooms
     const allLatest: LatestReading[] = [];
     ROOMS.forEach((r) => {
       const lt = roomsState[r]?.map[PIPE_FILTER]?.latest;
@@ -493,15 +599,14 @@ export default function RealTimeDataScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#111" }}>
-      <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+      <ScrollView
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         {/* Header */}
         <View style={styles.headerRow}>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <TouchableOpacity
-              onPress={() => {
-                detachAll();
-                router.back();
-              }}
+              onPress={() => router.back()}
               style={{ padding: 6, marginRight: 8 }}
             >
               <FontAwesome name="arrow-left" size={20} color="#0bfffe" />
@@ -626,7 +731,13 @@ const styles = StyleSheet.create({
     borderBottomColor: "#2a2a2a",
     paddingVertical: 6,
   },
-  statsCellHead: { color: "#eee", fontWeight: "bold", flex: 1, textAlign: "center", fontSize: 12 },
+  statsCellHead: {
+    color: "#eee",
+    fontWeight: "bold",
+    flex: 1,
+    textAlign: "center",
+    fontSize: 12,
+  },
   statsCellKey: { color: "#ccc", flex: 1, fontSize: 12 },
   statsCell: { color: "#fff", flex: 1, textAlign: "center", fontSize: 12 },
 

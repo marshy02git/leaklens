@@ -1,4 +1,5 @@
 {
+  "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "module": "NodeNext",
     "esModuleInterop": true,
@@ -8,11 +9,14 @@
     "outDir": "lib",
     "sourceMap": true,
     "strict": true,
-    "target": "es2017"
+    "target": "es2017",
+    "baseUrl": ".",
+    "paths": {
+      "@firebase/auth": ["./node_modules/@firebase/auth/dist/index.rn.d.ts"]
+    }
   },
   "compileOnSave": true,
   "include": [
     "src"
-  ],
-  "extends": "expo/tsconfig.base"
+  ]
 }

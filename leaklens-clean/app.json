@@ -2,6 +2,7 @@
   "expo": {
     "name": "leaklens-clean",
     "slug": "leaklens-clean",
+    "scheme": "leaklensclean",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

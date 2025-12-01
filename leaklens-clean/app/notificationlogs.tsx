@@ -118,7 +118,7 @@ export default function NotificationLogsScreen() {
     return () => off(alertsRef, "value", unsub);
   }, []);
 
-  const statusStates = [
+  /*const statusStates = [
     { label: "Good", color: "#28a745", icon: "check" as const },
     { label: "Caution", color: "#ffc107", icon: "exclamation-triangle" as const },
     { label: "Critical", color: "#dc3545", icon: "times" as const },
@@ -126,7 +126,7 @@ export default function NotificationLogsScreen() {
   const currentStatus = statusStates[statusIndex];
 
   const handleStatusPress = () =>
-    setStatusIndex((prevIndex) => (prevIndex + 1) % statusStates.length);
+    setStatusIndex((prevIndex) => (prevIndex + 1) % statusStates.length); */
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -235,20 +235,7 @@ export default function NotificationLogsScreen() {
         </View>
 
         {/* Status box */}
-        <View style={styles.statusContainerWrapper}>
-          <TouchableOpacity
-            style={[styles.statusContainer, { backgroundColor: currentStatus.color }]}
-            onPress={handleStatusPress}
-          >
-            <FontAwesome
-              name={currentStatus.icon}
-              size={20}
-              color="white"
-              style={{ marginRight: 10 }}
-            />
-            <Text style={styles.statusText}>{currentStatus.label}</Text>
-          </TouchableOpacity>
-        </View>
+        
 
         {/* Summary cards */}
         <View style={styles.cardsRow}>

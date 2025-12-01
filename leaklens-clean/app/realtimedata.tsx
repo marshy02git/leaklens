@@ -23,16 +23,29 @@ import Svg, { Path, Line } from "react-native-svg";
 
 // ---------- Fixed selection ----------
 const ROOMS = ["Room6", "Room4", "Room1"] as const;
-const PIPE_FILTER = "Pipe2"; // only show this pipe for each room
+const PIPE_FILTER = "Pipe2";
 
-// ---------- Simple thresholds for auto-alerts ----------
-// Tune these to match your test rig.
-const FLOW_CRITICAL_LMIN = 11.0;
-const PRESS_CRITICAL_PSI = 3.0;
-const TEMP_CRITICAL_C = 30.0;
+// ---------- Thresholds (HIGH + LOW) ----------
+const FLOW_CRITICAL_LMIN = 11.0;   // High flow
+const PRESS_CRITICAL_PSI = 3.0;    // High pressure
+const TEMP_CRITICAL_C = 30.0;      // High temperature
 
-// Cooldown between auto alerts for the same room/pipe
-const ALERT_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+const FLOW_MIN_LMIN = 7;         // Low flow
+const PRESS_MIN_PSI = 0.8;         // Low pressure
+const TEMP_MIN_C = 24;            // Low temp
+
+// UI colors
+const COLOR_HIGH = "#ff4d4d";      // Red
+const COLOR_LOW = "#ffff66";       // Yellow
+const COLOR_NORMAL = "#00ff66";    // Green
+
+// Background tints
+const BG_TINT_HIGH = "#331010";
+const BG_TINT_LOW = "#332f10";
+const BG_TINT_NORMAL = "#181818";
+
+// Cooldown between auto alerts
+const ALERT_COOLDOWN_MS = 2 * 60 * 1000;
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -49,7 +62,7 @@ type LatestReading = {
 };
 
 type HistoryPoint = {
-  ts_key: string; // DB key (iso-ish string)
+  ts_key: string;
   t_ms?: number;
   flow_Lmin?: number;
   temp_C?: number;
@@ -70,7 +83,7 @@ type RoomState = {
 
 type RoomsBundleState = Record<string, RoomState>;
 
-type AlertLevel = "info" | "caution" | "critical";
+type AlertLevel = "info" | "critical";
 
 const MAX_POINTS = 120;
 
@@ -86,7 +99,8 @@ const calcStats = (history: HistoryPoint[]) => {
 
   const safeMin = (a: number[]) => (a.length ? Math.min(...a) : undefined);
   const safeMax = (a: number[]) => (a.length ? Math.max(...a) : undefined);
-  const safeAvg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : undefined);
+  const safeAvg = (a: number[]) =>
+    a.length ? a.reduce((x, y) => x + y, 0) / a.length : undefined;
 
   const flows = pick("flow_Lmin");
   const temps = pick("temp_C");
@@ -105,7 +119,6 @@ const fmt = (v?: number, unit = "", digits = 1) =>
 const formatTimeWithMs = (ms?: number) => {
   if (!ms) return "—";
   try {
-    // @ts-ignore
     return new Date(ms).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
@@ -122,7 +135,7 @@ const formatTimeWithMs = (ms?: number) => {
   }
 };
 
-/** Decide alert severity based on latest reading. Very simple logic. */
+/** Determine alert severity based on thresholds */
 const computeSeverity = (r?: LatestReading): AlertLevel => {
   if (!r) return "info";
 
@@ -130,30 +143,56 @@ const computeSeverity = (r?: LatestReading): AlertLevel => {
   const press = num(r.pressure_psi, 0) as number;
   const temp = num(r.temp_C, 0) as number;
 
-  if (flow > FLOW_CRITICAL_LMIN || press > PRESS_CRITICAL_PSI || temp > TEMP_CRITICAL_C) {
+  // High faults
+  if (
+    flow > FLOW_CRITICAL_LMIN ||
+    press > PRESS_CRITICAL_PSI ||
+    temp > TEMP_CRITICAL_C
+  ) {
     return "critical";
   }
 
-  // you could add a "caution" band here later
+  // Low faults
+  if (
+    flow < FLOW_MIN_LMIN ||
+    press < PRESS_MIN_PSI ||
+    temp < TEMP_MIN_C
+  ) {
+    return "critical";
+  }
+
   return "info";
 };
 
-/** Builds a simple message describing why the reading is critical. */
+/** Build human-readable alert description */
 const buildCriticalMessage = (r: LatestReading): string => {
   const parts: string[] = [];
-  if (typeof r.flow_Lmin === "number" && r.flow_Lmin > FLOW_CRITICAL_LMIN) {
-    parts.push(`High flow ${r.flow_Lmin.toFixed(2)} L/min`);
+
+  if (typeof r.flow_Lmin === "number") {
+    if (r.flow_Lmin > FLOW_CRITICAL_LMIN)
+      parts.push(`High flow ${r.flow_Lmin.toFixed(2)} L/min`);
+    else if (r.flow_Lmin < FLOW_MIN_LMIN)
+      parts.push(`Low flow ${r.flow_Lmin.toFixed(2)} L/min`);
   }
-  if (typeof r.pressure_psi === "number" && r.pressure_psi > PRESS_CRITICAL_PSI) {
-    parts.push(`High pressure ${r.pressure_psi.toFixed(2)} PSI`);
+
+  if (typeof r.pressure_psi === "number") {
+    if (r.pressure_psi > PRESS_CRITICAL_PSI)
+      parts.push(`High pressure ${r.pressure_psi.toFixed(2)} PSI`);
+    else if (r.pressure_psi < PRESS_MIN_PSI)
+      parts.push(`Low pressure ${r.pressure_psi.toFixed(2)} PSI`);
   }
-  if (typeof r.temp_C === "number" && r.temp_C > TEMP_CRITICAL_C) {
-    parts.push(`High temp ${r.temp_C.toFixed(1)} °C`);
+
+  if (typeof r.temp_C === "number") {
+    if (r.temp_C > TEMP_CRITICAL_C)
+      parts.push(`High temp ${r.temp_C.toFixed(1)} °C`);
+    else if (r.temp_C < TEMP_MIN_C)
+      parts.push(`Low temp ${r.temp_C.toFixed(1)} °C`);
   }
+
   return parts.join(", ") || "Critical condition detected";
 };
 
-/** Writes a critical alert to RTDB (where notifications + logs pick it up). */
+/** Write a new critical alert to RTDB */
 const writeCriticalAlert = (roomName: string, pipeKey: string, reading: LatestReading) => {
   const alertsRoot = ref(rtdb, `Alerts/${roomName}`);
   const newRef = push(alertsRoot);
@@ -167,19 +206,25 @@ const writeCriticalAlert = (roomName: string, pipeKey: string, reading: LatestRe
   });
 };
 
-/* ---------- Tiny Sparkline ---------- */
+/* ---------- Sparkline with Threshold Lines (auto-scaled) ---------- */
 function Sparkline({
   data,
   accessor,
   width = 180,
   height = 48,
   strokeWidth = 2,
+  minThreshold,
+  maxThreshold
 }: {
   data: HistoryPoint[];
   accessor: (p: HistoryPoint) => number | undefined;
   width?: number;
   height?: number;
   strokeWidth?: number;
+
+  // NEW: thresholds
+  minThreshold: number;
+  maxThreshold: number;
 }) {
   const vals = data
     .map(accessor)
@@ -193,11 +238,13 @@ function Sparkline({
       </View>
     );
   }
+
   const min = Math.min(...valid);
   const max = Math.max(...valid);
   const span = Math.max(1e-6, max - min);
   const stepX = vals.length > 1 ? width / (vals.length - 1) : width;
 
+  // Build sparkline path
   let d = "";
   vals.forEach((y, i) => {
     if (typeof y !== "number") return;
@@ -206,15 +253,40 @@ function Sparkline({
     d += (d ? " L " : "M ") + `${X} ${Y}`;
   });
 
+  // Compute threshold line positions (auto-scaled)
+  const clampThreshold = (t: number) => {
+    // Convert threshold to Y position
+    return height - ((t - min) / span) * height;
+  };
+
+  const yMinLine = clampThreshold(minThreshold);
+  const yMaxLine = clampThreshold(maxThreshold);
+
   return (
     <Svg width={width} height={height}>
-      <Line x1={0} y1={height / 2} x2={width} y2={height / 2} stroke="#2a2a2a" strokeWidth={1} />
+      {/* Neutral gray threshold lines */}
+      <Line
+        x1={0} x2={width}
+        y1={yMinLine} y2={yMinLine}
+        stroke="#777"
+        strokeDasharray="4 4"
+        strokeWidth={1}
+      />
+      <Line
+        x1={0} x2={width}
+        y1={yMaxLine} y2={yMaxLine}
+        stroke="#777"
+        strokeDasharray="4 4"
+        strokeWidth={1}
+      />
+
+      {/* Sparkline */}
       <Path d={d} stroke="#0bfffe" strokeWidth={strokeWidth} fill="none" />
     </Svg>
   );
 }
+/* ---------- Pipe Card with High/Low Coloring + Background Tint ---------- */
 
-/* ---------- Screen ---------- */
 export default function RealTimeDataScreen() {
   const router = useRouter();
 
@@ -240,18 +312,18 @@ export default function RealTimeDataScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Unsubs per room/pipe
+  // Subscriptions
   const latestUnsubsRef = useRef<Record<string, () => void>>({});
   const historyUnsubsRef = useRef<Record<string, () => void>>({});
   const alertsUnsubsRef = useRef<Record<string, () => void>>({});
   const roomAlertCacheRef = useRef<Record<string, number>>({});
 
-  // For auto-alert logic
   const lastSeverityRef = useRef<Record<string, AlertLevel | undefined>>({});
   const hasSeenInitialRef = useRef<Record<string, boolean>>({});
   const lastAlertAtRef = useRef<Record<string, number>>({});
 
-  const key = (room: string, pipe: string, kind: "L" | "H") => `${kind}:${room}:${pipe}`;
+  const key = (room: string, pipe: string, kind: "L" | "H") =>
+    `${kind}:${room}:${pipe}`;
   const rpKey = (room: string, pipe: string) => `${room}/${pipe}`;
 
   const goToPipe = useCallback(
@@ -272,8 +344,6 @@ export default function RealTimeDataScreen() {
     latestUnsubsRef.current = {};
     historyUnsubsRef.current = {};
     alertsUnsubsRef.current = {};
-
-    // reset alert cache and UI count when leaving screen
     roomAlertCacheRef.current = {};
     lastSeverityRef.current = {};
     hasSeenInitialRef.current = {};
@@ -282,7 +352,6 @@ export default function RealTimeDataScreen() {
   }, []);
 
   const attachAll = useCallback(() => {
-    // reset cache and count on each re-attach so we don't keep stale values
     roomAlertCacheRef.current = {};
     lastSeverityRef.current = {};
     hasSeenInitialRef.current = {};
@@ -292,18 +361,21 @@ export default function RealTimeDataScreen() {
     ROOMS.forEach((roomName) => {
       const pipeKey = PIPE_FILTER;
 
-      // Latest
+      /* ---------- Latest subscription ---------- */
       const latestRef = ref(rtdb, `Devices/${roomName}/${pipeKey}/Latest`);
       const lu = onValue(
         latestRef,
         (snap) => {
           const v = (snap.val() || {}) as LatestReading;
-          const thisRPKey = rpKey(roomName, pipeKey);
+          const thisRP = rpKey(roomName, pipeKey);
 
-          // ---- Update UI state ----
+          // Update UI
           setRoomsState((prev) => {
-            const cur = prev[roomName] ?? { pipes: [pipeKey], map: {} as any };
-            const ps = cur.map[pipeKey] ?? {
+            const curR = prev[roomName] ?? {
+              pipes: [pipeKey],
+              map: {} as any,
+            };
+            const ps = curR.map[pipeKey] ?? {
               latest: undefined,
               history: [],
               stats: { min: {}, max: {}, avg: {} } as any,
@@ -313,47 +385,39 @@ export default function RealTimeDataScreen() {
               ...prev,
               [roomName]: {
                 pipes: [pipeKey],
-                map: { ...cur.map, [pipeKey]: { ...ps, latest: v } },
+                map: { ...curR.map, [pipeKey]: { ...ps, latest: v } },
               },
             };
           });
 
-          // ---- Auto-generate critical alerts based on latest ----
+          // Auto alerts
           const sev = computeSeverity(v);
-          const prevSev = lastSeverityRef.current[thisRPKey];
-          const hasSeenInitial = hasSeenInitialRef.current[thisRPKey];
+          const prevS = lastSeverityRef.current[thisRP];
+          const seen = hasSeenInitialRef.current[thisRP];
 
-          // If this is the first reading we've seen for this room/pipe
-          // while this screen is mounted, just record the severity and bail.
-          // This avoids generating an alert just because we opened the screen
-          // while it was already critical.
-          if (!hasSeenInitial) {
-            hasSeenInitialRef.current[thisRPKey] = true;
-            lastSeverityRef.current[thisRPKey] = sev;
+          if (!seen) {
+            hasSeenInitialRef.current[thisRP] = true;
+            lastSeverityRef.current[thisRP] = sev;
           } else {
-            // Only fire when we newly cross into "critical"
-            if (sev === "critical" && prevSev !== "critical") {
+            if (sev === "critical" && prevS !== "critical") {
               const now = Date.now();
-              const last = lastAlertAtRef.current[thisRPKey] ?? 0;
-
-              // Rate-limit: don't send more than one auto alert
-              // per ALERT_COOLDOWN_MS per room/pipe.
+              const last = lastAlertAtRef.current[thisRP] ?? 0;
               if (now - last > ALERT_COOLDOWN_MS) {
-                lastAlertAtRef.current[thisRPKey] = now;
-                writeCriticalAlert(roomName, pipeKey, v).catch((e) => {
-                  console.warn("Failed to write auto critical alert:", e);
-                });
+                lastAlertAtRef.current[thisRP] = now;
+                writeCriticalAlert(roomName, pipeKey, v).catch((e) =>
+                  console.warn("Failed alert:", e)
+                );
               }
             }
-
-            lastSeverityRef.current[thisRPKey] = sev;
+            lastSeverityRef.current[thisRP] = sev;
           }
         },
         (err) => setError(`Latest ${roomName}/${pipeKey}: ${err?.message ?? "unknown"}`)
       );
-      latestUnsubsRef.current[key(roomName, pipeKey, "L")] = () => off(latestRef, "value", lu);
+      latestUnsubsRef.current[key(roomName, pipeKey, "L")] = () =>
+        off(latestRef, "value", lu);
 
-      // History
+      /* ---------- History subscription ---------- */
       const readingsQ = query(
         ref(rtdb, `Devices/${roomName}/${pipeKey}/Readings`),
         limitToLast(MAX_POINTS)
@@ -362,11 +426,12 @@ export default function RealTimeDataScreen() {
         readingsQ,
         (snap) => {
           const val = snap.val() || {};
-          const points: HistoryPoint[] = Object.keys(val)
+          const pts: HistoryPoint[] = Object.keys(val)
             .sort()
             .map((k) => ({ ts_key: k, ...(val[k] || {}) }));
 
-          const stats = calcStats(points);
+          const stats = calcStats(pts);
+
           setRoomsState((prev) => {
             const cur = prev[roomName] ?? { pipes: [pipeKey], map: {} as any };
             const ps = cur.map[pipeKey] ?? {
@@ -375,40 +440,43 @@ export default function RealTimeDataScreen() {
               stats: { min: {}, max: {}, avg: {} } as any,
               expanded: false,
             };
+
             return {
               ...prev,
               [roomName]: {
                 pipes: [pipeKey],
-                map: { ...cur.map, [pipeKey]: { ...ps, history: points, stats } },
+                map: { ...cur.map, [pipeKey]: { ...ps, history: pts, stats } },
               },
             };
           });
         },
         (err) => setError(`Readings ${roomName}/${pipeKey}: ${err?.message ?? "unknown"}`)
       );
-      historyUnsubsRef.current[key(roomName, pipeKey, "H")] = () => off(readingsQ, "value", hu);
+      historyUnsubsRef.current[key(roomName, pipeKey, "H")] = () =>
+        off(readingsQ, "value", hu);
 
-      // Alerts count per room (only critical)
-      if (alertsUnsubsRef.current[roomName]) {
-        alertsUnsubsRef.current[roomName]!();
-      }
-      alertsUnsubsRef.current[roomName] = subscribeAlerts(roomName, (rows: any[]) => {
-        const criticalCount = Array.isArray(rows)
-          ? rows.filter((a: any) => a?.level === "critical").length
-          : 0;
+      /* ---------- Alerts count ---------- */
+      if (alertsUnsubsRef.current[roomName]) alertsUnsubsRef.current[roomName]!();
 
-        roomAlertCacheRef.current[roomName] = criticalCount;
+      alertsUnsubsRef.current[roomName] = subscribeAlerts(
+        roomName,
+        (rows: any[]) => {
+          const criticalCount = Array.isArray(rows)
+            ? rows.filter((a: any) => a?.level === "critical").length
+            : 0;
 
-        const total = Object.values(roomAlertCacheRef.current).reduce(
-          (a, b) => a + (b || 0),
-          0
-        );
-        setAlertsCount(total);
-      });
+          roomAlertCacheRef.current[roomName] = criticalCount;
+
+          const total = Object.values(roomAlertCacheRef.current).reduce(
+            (a, b) => a + (b || 0),
+            0
+          );
+          setAlertsCount(total);
+        }
+      );
     });
   }, []);
 
-  // Attach/detach on focus
   useFocusEffect(
     useCallback(() => {
       attachAll();
@@ -421,36 +489,65 @@ export default function RealTimeDataScreen() {
     detachAll();
     setTimeout(() => {
       attachAll();
-      setTimeout(() => setRefreshing(false), 400);
+      setTimeout(() => setRefreshing(false), 300);
     }, 50);
   }, [attachAll, detachAll]);
 
-  const toggleExpanded = useCallback((roomName: string, pipeKey: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setRoomsState((prev) => {
-      const curRoom = prev[roomName];
-      if (!curRoom) return prev;
-      const cur = curRoom.map[pipeKey];
-      if (!cur) return prev;
-      return {
-        ...prev,
-        [roomName]: {
-          pipes: curRoom.pipes,
-          map: { ...curRoom.map, [pipeKey]: { ...cur, expanded: !cur.expanded } },
-        },
-      };
-    });
-  }, []);
+  /* ---------- color helpers ---------- */
+  const colorForValue = (
+    value: number | undefined,
+    low: number,
+    high: number
+  ): string => {
+    if (value == null || Number.isNaN(value)) return COLOR_NORMAL;
+    if (value > high) return COLOR_HIGH;
+    if (value < low) return COLOR_LOW;
+    return COLOR_NORMAL;
+  };
 
-  /* ---------- UI helpers ---------- */
+  const labelForValue = (
+    value: number | undefined,
+    low: number,
+    high: number
+  ): string => {
+    if (value == null || Number.isNaN(value)) return "";
+    if (value > high) return " (HIGH)";
+    if (value < low) return " (LOW)";
+    return "";
+  };
+
+  const detectTint = (lt?: LatestReading) => {
+    if (!lt) return BG_TINT_NORMAL;
+
+    const f = lt.flow_Lmin ?? 0;
+    const p = lt.pressure_psi ?? 0;
+    const t = lt.temp_C ?? 0;
+
+    if (f > FLOW_CRITICAL_LMIN || p > PRESS_CRITICAL_PSI || t > TEMP_CRITICAL_C)
+      return BG_TINT_HIGH;
+
+    if (f < FLOW_MIN_LMIN || p < PRESS_MIN_PSI || t < TEMP_MIN_C)
+      return BG_TINT_LOW;
+
+    return BG_TINT_NORMAL;
+  };
+
+  /* ---------- PipeCard Component ---------- */
   const PipeCard = ({ roomName, pipeKey }: { roomName: string; pipeKey: string }) => {
     const ps = roomsState[roomName]?.map[pipeKey];
     const lt = ps?.latest;
     const st = ps?.stats;
 
+    const bgTint = detectTint(lt);
+
+    // Latest value coloring
+    const flowColor = colorForValue(lt?.flow_Lmin, FLOW_MIN_LMIN, FLOW_CRITICAL_LMIN);
+    const tempColor = colorForValue(lt?.temp_C, TEMP_MIN_C, TEMP_CRITICAL_C);
+    const pressColor = colorForValue(lt?.pressure_psi, PRESS_MIN_PSI, PRESS_CRITICAL_PSI);
+
     return (
-      <View style={styles.cardWrap}>
-        {/* Header row navigates to detail */}
+      <View style={[styles.cardWrap, { backgroundColor: bgTint }]}>
+        {/* Header row */}
         <TouchableOpacity style={styles.cardHead} onPress={() => goToPipe(roomName, pipeKey)}>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <FontAwesome name="tint" size={16} color="#0bfffe" />
@@ -461,12 +558,22 @@ export default function RealTimeDataScreen() {
 
         {/* Latest snapshot */}
         <View style={styles.latestRow}>
-          <Text style={styles.latestItem}>Flow: {fmt(num(lt?.flow_Lmin), " L/min")}</Text>
-          <Text style={styles.latestItem}>Temp: {fmt(num(lt?.temp_C), " °C")}</Text>
-          <Text style={styles.latestItem}>
-            Pressure: {fmt(num(lt?.pressure_psi), " PSI")}
+          <Text style={[styles.latestItem, { color: flowColor }]}>
+            Flow: {fmt(lt?.flow_Lmin, " L/min")}
+            <Text style={{ fontSize: 11 }}>{labelForValue(lt?.flow_Lmin, FLOW_MIN_LMIN, FLOW_CRITICAL_LMIN)}</Text>
+          </Text>
+
+          <Text style={[styles.latestItem, { color: tempColor }]}>
+            Temp: {fmt(lt?.temp_C, " °C")}
+            <Text style={{ fontSize: 11 }}>{labelForValue(lt?.temp_C, TEMP_MIN_C, TEMP_CRITICAL_C)}</Text>
+          </Text>
+
+          <Text style={[styles.latestItem, { color: pressColor }]}>
+            Pressure: {fmt(lt?.pressure_psi, " PSI")}
+            <Text style={{ fontSize: 11 }}>{labelForValue(lt?.pressure_psi, PRESS_MIN_PSI, PRESS_CRITICAL_PSI)}</Text>
           </Text>
         </View>
+
         <Text style={styles.latestTs}>
           Updated: {formatTimeWithMs(num(lt?.ts_server_ms) ?? lt?.t_ms ?? undefined)}
         </Text>
@@ -476,16 +583,18 @@ export default function RealTimeDataScreen() {
           <View style={styles.previewRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.previewStat}>
-                Min {fmt(num(st?.min.flow_Lmin), " L/m")} • Avg{" "}
-                {fmt(num(st?.avg.flow_Lmin), " L/m")} • Max{" "}
-                {fmt(num(st?.max.flow_Lmin), " L/m")}
+                Min {fmt(st?.min.flow_Lmin, " L/m")} • Avg {fmt(st?.avg.flow_Lmin, " L/m")} • Max{" "}
+                {fmt(st?.max.flow_Lmin, " L/m")}
               </Text>
             </View>
+
             <Sparkline
               data={ps?.history ?? []}
               accessor={(p) => p.flow_Lmin}
               width={140}
               height={40}
+              minThreshold={FLOW_MIN_LMIN}
+              maxThreshold={FLOW_CRITICAL_LMIN}
             />
           </View>
         )}
@@ -493,22 +602,42 @@ export default function RealTimeDataScreen() {
         {/* Expanded content */}
         {ps?.expanded && (
           <View style={styles.expandedBox}>
+            {/* Flow */}
             <Text style={styles.sectionLabel}>
               Flow (last {Math.min(ps.history.length, MAX_POINTS)} pts)
             </Text>
-            <Sparkline data={ps.history} accessor={(p) => p.flow_Lmin} width={260} height={64} />
+            <Sparkline
+              data={ps.history}
+              accessor={(p) => p.flow_Lmin}
+              width={260}
+              height={64}
+              minThreshold={FLOW_MIN_LMIN}
+              maxThreshold={FLOW_CRITICAL_LMIN}
+            />
 
+            {/* Pressure */}
             <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Pressure</Text>
             <Sparkline
               data={ps.history}
               accessor={(p) => p.pressure_psi}
               width={260}
               height={64}
+              minThreshold={PRESS_MIN_PSI}
+              maxThreshold={PRESS_CRITICAL_PSI}
             />
 
+            {/* Temperature */}
             <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Temperature</Text>
-            <Sparkline data={ps.history} accessor={(p) => p.temp_C} width={260} height={64} />
+            <Sparkline
+              data={ps.history}
+              accessor={(p) => p.temp_C}
+              width={260}
+              height={64}
+              minThreshold={TEMP_MIN_C}
+              maxThreshold={TEMP_CRITICAL_C}
+            />
 
+            {/* Stats Table */}
             <View style={styles.statsTable}>
               <View style={styles.statsRow}>
                 <Text style={styles.statsCellHead}>Metric</Text>
@@ -516,26 +645,30 @@ export default function RealTimeDataScreen() {
                 <Text style={styles.statsCellHead}>Avg</Text>
                 <Text style={styles.statsCellHead}>Max</Text>
               </View>
+
               <View style={styles.statsRow}>
                 <Text style={styles.statsCellKey}>Flow</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.min.flow_Lmin), " L/m")}</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.avg.flow_Lmin), " L/m")}</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.max.flow_Lmin), " L/m")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.min.flow_Lmin, " L/m")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.avg.flow_Lmin, " L/m")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.max.flow_Lmin, " L/m")}</Text>
               </View>
+
               <View style={styles.statsRow}>
                 <Text style={styles.statsCellKey}>Temp</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.min.temp_C), " °C")}</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.avg.temp_C), " °C")}</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.max.temp_C), " °C")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.min.temp_C, " °C")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.avg.temp_C, " °C")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.max.temp_C, " °C")}</Text>
               </View>
+
               <View style={styles.statsRow}>
                 <Text style={styles.statsCellKey}>Pressure</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.min.pressure_psi), " PSI")}</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.avg.pressure_psi), " PSI")}</Text>
-                <Text style={styles.statsCell}>{fmt(num(st?.max.pressure_psi), " PSI")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.min.pressure_psi, " PSI")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.avg.pressure_psi, " PSI")}</Text>
+                <Text style={styles.statsCell}>{fmt(st?.max.pressure_psi, " PSI")}</Text>
               </View>
             </View>
 
+            {/* Recent Log */}
             <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Recent Log</Text>
             {(ps.history.slice(-12) || []).map((p) => (
               <View key={p.ts_key} style={styles.logRow}>
@@ -543,17 +676,30 @@ export default function RealTimeDataScreen() {
                   {p.ts_key.replace(/T/, " ").replace(/_/g, ":")}
                 </Text>
                 <Text style={styles.logTextSm}>
-                  F:{fmt(num(p.flow_Lmin), "", 2)}  P:{fmt(num(p.pressure_psi), "", 1)}  T:
-                  {fmt(num(p.temp_C), "", 1)}
+                  F:{fmt(p.flow_Lmin, "", 2)}  P:{fmt(p.pressure_psi, "", 1)}  T:{fmt(p.temp_C, "", 1)}
                 </Text>
               </View>
             ))}
           </View>
         )}
 
-        {/* Expand/Collapse */}
+        {/* Expand toggle */}
         <TouchableOpacity
-          onPress={() => toggleExpanded(roomName, pipeKey)}
+          onPress={() =>
+            setRoomsState((prev) => {
+              const cur = prev[roomName].map[pipeKey];
+              return {
+                ...prev,
+                [roomName]: {
+                  ...prev[roomName],
+                  map: {
+                    ...prev[roomName].map,
+                    [pipeKey]: { ...cur, expanded: !cur.expanded },
+                  },
+                },
+              };
+            })
+          }
           style={{ marginTop: 8, alignSelf: "flex-start" }}
         >
           <Text style={{ color: "#0bfffe" }}>{ps?.expanded ? "Collapse" : "Expand"}</Text>
@@ -561,7 +707,7 @@ export default function RealTimeDataScreen() {
       </View>
     );
   };
-
+  /* ---------- Dashboard ---------- */
   const dashboard = useMemo(() => {
     const allLatest: LatestReading[] = [];
     ROOMS.forEach((r) => {
@@ -570,7 +716,9 @@ export default function RealTimeDataScreen() {
     });
     if (allLatest.length === 0) return null;
 
-    const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+    const avg = (a: number[]) =>
+      a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+
     const flows = allLatest.map((x) => num(x.flow_Lmin, 0) as number);
     const temps = allLatest.map((x) => num(x.temp_C, 0) as number);
     const press = allLatest.map((x) => num(x.pressure_psi, 0) as number);
@@ -597,10 +745,13 @@ export default function RealTimeDataScreen() {
     );
   }, [roomsState, alertsCount]);
 
+  /* ---------- Screen UI ---------- */
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#111" }}>
       <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
         {/* Header */}
         <View style={styles.headerRow}>
@@ -623,9 +774,10 @@ export default function RealTimeDataScreen() {
           </View>
         )}
 
-        {/* Per-room sections */}
+        {/* Per-Room Sections */}
         <View style={{ paddingHorizontal: 12, paddingBottom: 24 }}>
           <Text style={styles.sectionTitle}>Pipes</Text>
+
           {ROOMS.map((roomName) => (
             <View key={roomName} style={{ marginTop: 10 }}>
               <Text style={styles.roomHeader}>{roomName}</Text>
@@ -665,7 +817,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 
-  dashboard: { flexDirection: "row", justifyContent: "space-around", marginVertical: 20 },
+  dashboard: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginVertical: 20,
+  },
   card: {
     backgroundColor: "#1f1f1f",
     padding: 18,
@@ -713,17 +869,30 @@ const styles = StyleSheet.create({
   },
   cardHeadTitle: { color: "#fff", fontSize: 16, fontWeight: "bold", marginLeft: 8 },
 
-  latestRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 4 },
+  latestRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
   latestItem: { color: "#ddd", fontSize: 13 },
   latestTs: { color: "#999", fontSize: 11, marginBottom: 6 },
 
   previewRow: { flexDirection: "row", alignItems: "center", marginTop: 6 },
   previewStat: { color: "#bbb", fontSize: 12, marginRight: 10 },
 
-  expandedBox: { backgroundColor: "#151515", borderRadius: 10, padding: 10, marginTop: 10 },
+  expandedBox: {
+    backgroundColor: "#151515",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
+  },
   sectionLabel: { color: "#aaa", fontSize: 12, marginBottom: 6 },
 
-  statsTable: { marginTop: 8, borderTopWidth: 1, borderTopColor: "#2a2a2a" },
+  statsTable: {
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#2a2a2a",
+  },
   statsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
